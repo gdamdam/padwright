@@ -1,35 +1,99 @@
 #!/usr/bin/env python3
 """
-Build SP-404 MK2 drum kits from sample packs.
-Output: /Volumes/eight/MUSIC_PRODUCTION/SAMPLES_SP404MK2/
-Each kit: folder with 01_kick.wav ... 12_perc.wav (16-bit / 48kHz / mono WAV)
+make_kits_ff.py — Build SP-404 MK2 drum kits from the ff archive.
+
+Source : /Volumes/eight/ff/*.zip   (470 drum machine sample packs)
+Output : /Volumes/eight/MUSIC_PRODUCTION/SP404MK2_DRUMKITS/
+  drumkit/  — one curated 16-pad kit per machine (all 470 zips)
+  blocks/   — per-type 16-pad banks for monster kits (≥100 audio files)
+  super/    — cross-machine "best-of" themed banks (kicks, snares, hats…)
+
+Audio format : 16-bit / 48 kHz / mono WAV  (matches existing SP-404MK2 kits)
+
+Pad layout (drag-and-drop ready — already pre-reordered like reorder_kits.py):
+  File 01-04 → silent pads   → pads 13-16 (top row, empty)
+  File 05 rim       → pad 9     File 13 kick      → pad 1 ✓
+  File 06 clap      → pad 10    File 14 snare     → pad 2
+  File 07 cowbell   → pad 11    File 15 closed_hh → pad 3
+  File 08 perc      → pad 12    File 16 open_hh   → pad 4
+  File 09 low_tom   → pad 5
+  File 10 mid_tom   → pad 6
+  File 11 hi_tom    → pad 7
+  File 12 crash     → pad 8
+
+Tier logic:
+  Tier 1 (≤16 files)  : extract all sounds, classify each to its slot
+  Tier 2 (17-99 files): pick one best-per-type (middle of sorted candidates)
+  Tier 4 (≥100 files) : same as Tier 2 + also build per-type category blocks
+
+Usage:
+  python make_kits_ff.py                   # build all
+  python make_kits_ff.py --dry-run         # scan only, no file output
+  python make_kits_ff.py --status          # count built vs total, then exit
+  python make_kits_ff.py --batch 1         # only batch 1 (4,A,B — 58 kits)
+  python make_kits_ff.py --batch 2         # batch 2 (C,D,E — 89 kits)
+  python make_kits_ff.py --batch 3         # batch 3 (F–L — 95 kits)
+  python make_kits_ff.py --batch 4         # batch 4 (M–R — 104 kits)
+  python make_kits_ff.py --batch 5         # batch 5 (S–W — 57 kits)
+  python make_kits_ff.py --batch 6         # batch 6 (Y,Z — 67 kits)
+  python make_kits_ff.py Roland Boss       # only zips matching any filter word
+  # Super banks only (after all batches done):
+  python make_kits_ff.py --super-only
+  # Override source / destination:
+  python make_kits_ff.py --src /path/to/packs --dst /path/to/output
+  # Source can be a folder of .zip files OR a folder of unzipped subdirectories
 """
 
-import os
-import re
-import subprocess
+import os, re, sys, shutil, subprocess, tempfile, time, wave, zipfile
+from pathlib import Path
+from collections import defaultdict, deque
 
-OUTPUT_DIR = "/Volumes/eight/MUSIC_PRODUCTION/SAMPLES_SP404MK2"
-SFM = "/Volumes/eight/MUSIC_PRODUCTION/SAMPLES/SamplesFromMars"
-SMP = "/Volumes/eight/MUSIC_PRODUCTION/SAMPLES"
+# ── Paths ──────────────────────────────────────────────────────────────────────
+SRC_DIR    = Path("/Volumes/eight/ff")
+DST_DIR    = Path("/Volumes/eight/MUSIC_PRODUCTION/SP404MK2_DRUMKITS")
+SILENT_WAV = "/tmp/sp404mk2_ff_empty.wav"
 
-PADS = [
-    (1,  "kick"),
-    (2,  "snare"),
-    (3,  "closed_hh"),
-    (4,  "open_hh"),
-    (5,  "low_tom"),
-    (6,  "mid_tom"),
-    (7,  "hi_tom"),
-    (8,  "crash"),
-    (9,  "rim"),
-    (10, "clap"),
-    (11, "cowbell"),
-    (12, "perc"),
+TIER_BLOCK = 100  # ≥ this many audio files → also build category blocks
+
+# Batch letter ranges (first char of machine name, lowercased)
+BATCHES = {
+    1: set("4ab"),
+    2: set("cde"),
+    3: set("fghjkl"),
+    4: set("mnopqr"),
+    5: set("stuvw"),
+    6: set("yz"),
+}
+
+# ── Pad layout (file_number, type_name) ───────────────────────────────────────
+# Files 01-04 are silent placeholders (top row). Files 05-16 are sounds.
+SOUND_SLOTS = [
+    (5,  "rim"),
+    (6,  "clap"),
+    (7,  "cowbell"),
+    (8,  "perc"),
+    (9,  "low_tom"),
+    (10, "mid_tom"),
+    (11, "hi_tom"),
+    (12, "crash"),
+    (13, "kick"),
+    (14, "snare"),
+    (15, "closed_hh"),
+    (16, "open_hh"),
 ]
+SLOT_NAMES = [t for _, t in SOUND_SLOTS]
 
-# Ordered classifiers — first match wins.
-# Keywords are checked against the full lowercased file path.
+# Already-exported kit files used for cross-machine super banks
+SUPER_FILES = {
+    "kick":      "13_kick.wav",
+    "snare":     "14_snare.wav",
+    "closed_hh": "15_closed_hh.wav",
+    "open_hh":   "16_open_hh.wav",
+    "clap":      "06_clap.wav",
+    "perc":      "08_perc.wav",
+}
+
+# ── Classifiers (same keywords as make_kits.py) ────────────────────────────────
 CLASSIFIERS = [
     ("kick",      ["bass drum", "bassdrum", "bass_drum",
                    "bd a ", "bd b ", "bd c ", "/bd ", " bd ", "/bd.", " bd.", "_bd.",
@@ -64,20 +128,6 @@ CLASSIFIERS = [
 ]
 
 
-def collect_wavs(root):
-    """Return sorted list of all audio files under root (no hidden files)."""
-    result = []
-    if not os.path.isdir(root):
-        return result
-    for dirpath, _, filenames in os.walk(root):
-        for fn in filenames:
-            if fn.startswith('.'):
-                continue
-            if fn.lower().endswith(('.wav', '.aif', '.aiff')):
-                result.append(os.path.join(dirpath, fn))
-    return sorted(result)
-
-
 def classify(filepath):
     """Return drum type string or None using keyword matching."""
     p = filepath.lower().replace('\\', '/')
@@ -94,7 +144,7 @@ def classify(filepath):
 
 
 def pick_file(candidates):
-    """Pick the middle file from a sorted list (avoids extremes)."""
+    """Pick the middle file from a sorted list (avoids extreme variants)."""
     if not candidates:
         return None
     s = sorted(candidates)
@@ -102,309 +152,654 @@ def pick_file(candidates):
 
 
 def export(src, dst):
-    """Convert src to 16-bit / 48kHz / mono WAV."""
-    cmd = [
-        "ffmpeg", "-y", "-i", src,
-        "-ac", "1", "-ar", "48000", "-sample_fmt", "s16",
-        dst
-    ]
+    """Convert src to 16-bit / 48 kHz / mono WAV via ffmpeg."""
+    cmd = ["ffmpeg", "-y", "-i", src,
+           "-ac", "1", "-ar", "48000", "-sample_fmt", "s16", dst]
     r = subprocess.run(cmd, capture_output=True)
     return r.returncode == 0
 
 
-def sanitize_name(s):
-    """Make a string safe for use in filenames (max 20 chars)."""
-    s = re.sub(r'[^a-zA-Z0-9]', '_', s)
-    s = re.sub(r'_+', '_', s).strip('_')
-    return s[:20] or 'pad'
+def make_silent_wav(path, sr=48000, ms=50):
+    n = int(sr * ms / 1000)
+    with wave.open(path, 'w') as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        w.writeframes(b'\x00' * n * 2)
 
 
-def build_synth_kit(kit_name, wav_root, output_subdir, max_pads=12):
-    """Build a kit by picking one sample per first-level subfolder (patch), evenly sampled."""
-    out_dir = os.path.join(OUTPUT_DIR, output_subdir, kit_name)
-    os.makedirs(out_dir, exist_ok=True)
+_AUDIO_EXTS = {'.wav', '.aif', '.aiff'}
 
-    wavs = collect_wavs(wav_root)
-    if not wavs:
-        print(f"  !! no WAV files found at: {wav_root}")
-        return 0
 
-    # Group by first-level subfolder relative to wav_root
-    groups = {}
-    for f in wavs:
-        rel = os.path.relpath(f, wav_root)
-        parts = rel.split(os.sep)
-        group = parts[0] if len(parts) > 1 else '_root'
-        groups.setdefault(group, []).append(f)
-
-    group_names = sorted(groups.keys())
-
-    if len(group_names) == 1 and group_names[0] == '_root':
-        # Flat folder: spread evenly across pads
-        all_files = sorted(groups['_root'])
-        if len(all_files) <= max_pads:
-            picks = [(os.path.splitext(os.path.basename(f))[0], f) for f in all_files]
-        else:
-            step = len(all_files) / max_pads
-            picks = [(os.path.splitext(os.path.basename(all_files[int(i * step)]))[0],
-                      all_files[int(i * step)]) for i in range(max_pads)]
+def list_audio(pack_path):
+    """List relative audio file names inside a zip or directory (sorted)."""
+    pack_path = Path(pack_path)
+    if pack_path.suffix.lower() == '.zip':
+        with zipfile.ZipFile(pack_path) as zf:
+            return sorted(
+                n for n in zf.namelist()
+                if not os.path.basename(n).startswith('.')
+                and Path(n).suffix.lower() in _AUDIO_EXTS
+                and not n.endswith('/')
+            )
     else:
-        # One pick per subfolder group, evenly sampled if more than max_pads
-        all_picks = [(name, pick_file(files)) for name, files in sorted(groups.items())]
-        if len(all_picks) > max_pads:
-            step = len(all_picks) / max_pads
-            picks = [all_picks[int(i * step)] for i in range(max_pads)]
-        else:
-            picks = all_picks
-
-    picks = picks[:max_pads]
-
-    exported = 0
-    for i, (label, src) in enumerate(picks, 1):
-        label_clean = sanitize_name(label)
-        dst = os.path.join(out_dir, f"{i:02d}_{label_clean}.wav")
-        ok = export(src, dst)
-        src_short = "/".join(src.replace(SFM, "SFM").replace(SMP, "SMP").split("/")[-3:])
-        status = "OK  " if ok else "FAIL"
-        print(f"  {i:02d}_{label_clean:<20} {status}  {src_short}")
-        if ok:
-            exported += 1
-    return exported
+        return sorted(
+            str(f.relative_to(pack_path))
+            for f in pack_path.rglob('*')
+            if f.is_file()
+            and not f.name.startswith('.')
+            and f.suffix.lower() in _AUDIO_EXTS
+        )
 
 
-def build_kit(kit_name, wav_root, is_special=False):
-    out_dir = os.path.join(OUTPUT_DIR, "drumkit", kit_name)
-    os.makedirs(out_dir, exist_ok=True)
+def extract_audio(pack_path, tmp_dir):
+    """Extract/copy all audio files into tmp_dir. Return sorted abs paths."""
+    pack_path = Path(pack_path)
+    out = []
+    if pack_path.suffix.lower() == '.zip':
+        with zipfile.ZipFile(pack_path) as zf:
+            for member in zf.namelist():
+                if (not os.path.basename(member).startswith('.')
+                        and Path(member).suffix.lower() in _AUDIO_EXTS
+                        and not member.endswith('/')):
+                    zf.extract(member, tmp_dir)
+                    out.append(os.path.join(tmp_dir, member))
+    else:
+        for f in sorted(pack_path.rglob('*')):
+            if f.is_file() and not f.name.startswith('.') \
+                    and f.suffix.lower() in _AUDIO_EXTS:
+                rel = f.relative_to(pack_path)
+                dst = Path(tmp_dir) / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(f), str(dst))
+                out.append(str(dst))
+    return sorted(out)
 
-    wavs = collect_wavs(wav_root)
-    if not wavs:
-        print(f"  !! no WAV files found at: {wav_root}")
-        return 0
 
-    # Classify all files into drum type buckets
-    candidates = {pad_name: [] for _, pad_name in PADS}
+def sanitize(s, n=20):
+    s = re.sub(r'[^a-zA-Z0-9]', '_', s)
+    return re.sub(r'_+', '_', s).strip('_')[:n] or 'pad'
+
+
+# ── Kit builder ────────────────────────────────────────────────────────────────
+
+def build_kit(audio_files, kit_dir, dry_run):
+    """
+    Classify files, pick one per slot, export a full 16-pad kit.
+
+    All 16 WAV files are always written — silent placeholder for any slot
+    that has no matching sound, so drag-and-drop always loads 16 pads.
+
+    Filling priority (drum kits):
+      1. One best-per-type to its designated slot (kick→13, snare→14 …)
+      2. Generic "tom" names → lowest empty tom slot
+      3. Any remaining unclassified sounds → remaining empty slots
+      4. Still-empty slots → silent placeholder WAV
+
+    Non-drum / synth kits: sounds spread evenly across all 12 slots.
+
+    Returns dict of type → chosen_src_path (for super bank collection).
+    """
+    buckets = defaultdict(list)
     unclassified = []
-
-    for f in wavs:
+    for f in audio_files:
         t = classify(f)
-        if t and t in candidates:
-            candidates[t].append(f)
+        (buckets[t] if t else unclassified).append(f)
+
+    is_drum = bool(buckets)
+    assignments = {}  # slot_type → abs_src_path
+
+    if is_drum:
+        # Pass 1: best representative per classified type
+        for slot_type in SLOT_NAMES:
+            chosen = pick_file(buckets.get(slot_type, []))
+            if chosen:
+                assignments[slot_type] = chosen
+
+        # Pass 2: generic "tom" names → lowest empty tom slot
+        for ts in ["low_tom", "mid_tom", "hi_tom"]:
+            if ts not in assignments:
+                tom_cands = [f for f in unclassified
+                             if "tom" in os.path.basename(f).lower()]
+                if tom_cands:
+                    chosen = tom_cands[0]
+                    assignments[ts] = chosen
+                    unclassified.remove(chosen)
+
+        # Pass 3: fill remaining empty slots with unclassified sounds
+        for slot_type in SLOT_NAMES:
+            if slot_type not in assignments and unclassified:
+                assignments[slot_type] = unclassified.pop(0)
+
+    else:
+        # Non-drum / synth: spread evenly across all 12 sound slots
+        files = sorted(audio_files)
+        if len(files) > len(SLOT_NAMES):
+            step = len(files) / len(SLOT_NAMES)
+            files = [files[int(i * step)] for i in range(len(SLOT_NAMES))]
+        for slot_type, f in zip(SLOT_NAMES, files):
+            assignments[slot_type] = f
+
+    filled   = len(assignments)
+    empty    = len(SLOT_NAMES) - filled
+    tag      = "(drum)" if is_drum else "(synth-spread)"
+
+    if dry_run:
+        print(f"    {filled:2d}/12 filled  {empty} silent  {tag}")
+        return assignments
+
+    os.makedirs(kit_dir, exist_ok=True)
+
+    # Silent top-row pads (01-04) — always
+    for i in range(1, 5):
+        shutil.copy(SILENT_WAV, os.path.join(kit_dir, f"0{i}_empty.wav"))
+
+    # Sound pads (05-16) — sound or silent placeholder
+    for file_num, slot_type in SOUND_SLOTS:
+        dst = os.path.join(kit_dir, f"{file_num:02d}_{slot_type}.wav")
+        src = assignments.get(slot_type)
+        if src:
+            ok = export(src, dst)
+            print(f"    {file_num:02d}_{slot_type:<12} {'OK  ' if ok else 'FAIL'}  {os.path.basename(src)}")
         else:
-            unclassified.append(f)
+            shutil.copy(SILENT_WAV, dst)
+            print(f"    {file_num:02d}_{slot_type:<12} EMPTY (silent placeholder)")
 
-    # For special/non-drum kits: spread unclassified across empty pads
-    if is_special and unclassified:
-        empty_pads = [pn for _, pn in PADS if not candidates[pn]]
-        for i, pad_name in enumerate(empty_pads):
-            if i < len(unclassified):
-                candidates[pad_name].append(unclassified[i])
+    return assignments
 
-    # Generic tom distribution: spread plain "tom" files across empty tom pads
-    tom_pads = ["low_tom", "mid_tom", "hi_tom"]
-    tom_files = [f for f in unclassified if "tom" in f.lower()]
-    tom_idx = 0
-    for pn in tom_pads:
-        if not candidates[pn] and tom_idx < len(tom_files):
-            candidates[pn].append(tom_files[tom_idx])
-            tom_idx += 1
 
-    # Export
-    exported = 0
-    for pad_num, pad_name in PADS:
-        chosen = pick_file(candidates[pad_name])
-        if not chosen:
-            print(f"  {pad_num:02d}_{pad_name:<12} --")
+# ── Category blocks (monster kits) ────────────────────────────────────────────
+
+def build_blocks(audio_files, machine_name, blocks_dir, dry_run):
+    """
+    Build per-type 16-pad banks for monster kits (≥100 files).
+    Each block: up to 16 sounds of the same category, evenly sampled.
+    """
+    buckets = defaultdict(list)
+    for f in audio_files:
+        t = classify(f)
+        if t:
+            buckets[t].append(f)
+
+    groups = {
+        "KICKS":  sorted(buckets.get("kick", [])),
+        "SNARES": sorted(buckets.get("snare", [])),
+        "HATS":   sorted(buckets.get("closed_hh", []) + buckets.get("open_hh", [])),
+        "TOMS":   sorted(buckets.get("low_tom", []) + buckets.get("mid_tom", []) +
+                         buckets.get("hi_tom", [])),
+        "CLAPS":  sorted(buckets.get("clap", [])),
+        "PERC":   sorted(buckets.get("perc", []) + buckets.get("rim", []) +
+                         buckets.get("cowbell", []) + buckets.get("crash", [])),
+    }
+
+    pfx = sanitize(machine_name, 14)
+
+    for block_name, files in groups.items():
+        if not files:
             continue
-        dst = os.path.join(out_dir, f"{pad_num:02d}_{pad_name}.wav")
-        ok = export(chosen, dst)
-        src_short = "/".join(chosen.replace(SFM, "SFM").replace(SMP, "SMP").split("/")[-3:])
-        status = "OK  " if ok else "FAIL"
-        print(f"  {pad_num:02d}_{pad_name:<12} {status}  {src_short}")
-        if ok:
-            exported += 1
+        # Evenly sample down to 16 if needed
+        if len(files) > 16:
+            step = len(files) / 16
+            files = [files[int(i * step)] for i in range(16)]
 
-    return exported
+        block_dir = os.path.join(blocks_dir, machine_name, f"{pfx}_{block_name}")
+        print(f"    BLOCK {block_name:<8} {len(files):2d} files → {os.path.basename(block_dir)}")
 
+        if dry_run:
+            continue
 
-# ── Kit definitions ────────────────────────────────────────────────────────────
-
-KITS_MAIN = [
-    # ── SamplesFromMars: classic drum machines ────────────────────────────────
-    ("01_TR505",             f"{SFM}/505 From Mars/WAV/01. Individual Hits"),
-    ("02_TR606",             f"{SFM}/606 From Mars/WAV/01. Individual Hits"),
-    ("03_TR626",             f"{SFM}/626 From Mars/WAV/01. Individual Hits"),
-    ("04_TR707",             f"{SFM}/707 From Mars/WAV/01. Individual Hits"),
-    ("05_TR808",             f"{SFM}/808 From Mars/WAV/01. Individual Hits"),
-    ("06_TR808_Legacy",      f"{SFM}/808 From Mars - Legacy/WAV/1. Individual Hits"),
-    ("07_TR909",             f"{SFM}/909 From Mars/WAV/Individual Hits"),
-    ("08_CR78",              f"{SFM}/CR78 From Mars/WAV/One Shots/Individual Hits/Original/Clean"),
-    ("09_DMX",               f"{SFM}/DMX From Mars/WAV/01. Individual Hits/DMX"),
-    ("10_DrBohm",            f"{SFM}/Dr Bohm From Mars/WAV/Individual Hits/Dr Bohm"),
-    ("11_Drumtrax",          f"{SFM}/Drumtrax From Mars/WAV/01. Individual Hits/Digital Clean"),
-    ("12_Drumulator",        f"{SFM}/Drumulator From Mars/WAV/01. Individual Hits/Drumulator"),
-    ("13_JupiterDrums",      f"{SFM}/Jupiter Drums From Mars/WAV/01. Individual Hits"),
-    ("14_LinnDrum",          f"{SFM}/Lindrum From Mars/WAV/01. Individual Hits"),
-    ("15_LinnDrum_Legacy",   f"{SFM}/Lindrum From Mars - Legacy/WAV/01. Individual Hits"),
-    ("16_Linn60",            f"{SFM}/Linn60 From Mars/WAV/01. Individual Hits"),
-    ("17_LM1",               f"{SFM}/LM1 From Mars/WAV/01. Individual Hits"),
-    ("18_ModularDrums",      f"{SFM}/Modular Drums From Mars/WAV/01. Individual Hits"),
-    ("19_MPC1",              f"{SFM}/MPC1 From Mars/WAV/01. Individual Hits"),
-    ("20_MPC3000",           f"{SFM}/MPC3000 From Mars/WAV/01. Individual Hits"),
-    ("21_MPC60",             f"{SFM}/MPC60 From Mars/WAV/Individual Hits"),
-    ("22_MR10",              f"{SFM}/MR10 From Mars/WAV/01. Individual Hits"),
-    ("23_Pulsar",            f"{SFM}/Pulsar From Mars/WAV/01. One Shots/01. Individual Hits"),
-    ("24_Rhythm700",         f"{SFM}/Rhythm From Mars/WAV/Individual Hits"),
-    ("25_SDS800",            f"{SFM}/SDS800 From Mars/WAV/Individual Hits"),
-    ("26_SDSV",              f"{SFM}/SDSV From Mars/WAV/Individual Hits"),
-    ("27_SP909",             f"{SFM}/SP 909 From Mars/WAV/01. Individual Hits"),
-    ("28_SP1200",            f"{SFM}/SP1200 From Mars/WAV/Drums/Individual Hits"),
-    ("29_Synare",            f"{SFM}/Synare From Mars/WAV/01. One Hits"),
-    ("30_TOM",               f"{SFM}/TOM From Mars/WAV/01. Individual Hits/01. TOM"),
-    ("31_VinylDrumMachines", f"{SFM}/Vinyl Drum Machines From Mars/WAV/01. Individual Hits"),
-    ("32_VinylDrums",        f"{SFM}/Vinyl Drums From Mars/WAV/01. Individual Hits"),
-    ("33_Viscount",          f"{SFM}/Viscount From Mars/WAV/01. Individual Hits"),
-    ("34_Wendel",            f"{SFM}/Wendel From Mars/WAV/01. Individual Hits"),
-    # ── Other packs ───────────────────────────────────────────────────────────
-    ("35_Psymun",            f"{SMP}/psymun samples 4"),
-    ("36_XLNT_QuestForBass", f"{SMP}/XLNT Quest For Bass/Drums"),
-    ("37_Burial_Style",      f"{SMP}/Samples by Vanity In The Style Of Vol.23 BURIAL WAV"),
-    ("38_Cr2_Bratwave",      f"{SMP}/Sample Tools by Cr2 bratwave beats (incl. Vocals)/One_Shots/Drum_One_Shots"),
-    ("39_Cr2_UKGarage",      f"{SMP}/Sample Tools by Cr2 UK Garage & Vocals/One_Shots/Drum_One_Shots"),
-    ("40_Ghosthack_Techno",  f"{SMP}/Ghosthack - AC2023 - Day 1 - Techno Pack/One Shots"),
-    ("41_HighTech_House",    f"{SMP}/High Tech Minimal and Melodic House"),
-    ("42_FEM_808_909",       f"{SMP}/FEM sample pack/2. Drum hits"),
-    ("43_Zenhiser_Convex",   f"{SMP}/Zenhiser Convex Breakbeat & Electro/one_shots"),
-    ("44_Oversampled",       f"{SMP}/Oversampled Super Heavy Power Drum Fills WAV/Drum Fill Creator_s Kit"),
-    ("45_PO12",              f"{SMP}/Audio Wanderer - PO-12 Drum Kit (Sample Library)"),
-    ("46_RARE_Percussion",   f"{SMP}/RARE Percussion AmaPercussion vol.2/ONESHOTS"),
-]
-
-KITS_SPECIAL = [
-    ("47_101_FromMars",   f"{SFM}/101 From Mars/WAV"),
-    ("48_360_FromMars",   f"{SFM}/360 From Mars/WAV"),
-    ("49_727_WorldPerc",  f"{SFM}/727 From Mars/WAV/01. Clean/01. Hits"),
-    ("50_Micro_FromMars", f"{SFM}/Micro From Mars/WAV"),
-    ("51_Minipops",       f"{SFM}/Minipops Snacks From Mars/WAV/02. One Hits"),
-    ("52_SK1_FromMars",   f"{SFM}/SK1 From Mars/WAV"),
-]
+        os.makedirs(block_dir, exist_ok=True)
+        for i, src in enumerate(files, 1):
+            label = sanitize(Path(src).stem, 14)
+            dst = os.path.join(block_dir, f"{i:02d}_{label}.wav")
+            export(src, dst)
 
 
-# ── Non-drum kit definitions ────────────────────────────────────────────────
+# ── Super banks ────────────────────────────────────────────────────────────────
 
-KITS_SYNTH = [
-    # ── SamplesFromMars: classic synths (one sound per patch/subfolder) ───────
-    ("01_Mini_Moog",      f"{SFM}/Mini From Mars/WAV"),
-    ("02_OB_Oberheim",    f"{SFM}/OB From Mars/WAV"),
-    ("03_Sid_C64",        f"{SFM}/Sid From Mars/WAV"),
-    ("04_Soviet_Synths",  f"{SFM}/Soviet Synths From Mars/WAV"),
-    ("05_SH5_Roland",     f"{SFM}/SH5 From Mars/WAV"),
-    ("06_MS10_Korg",      f"{SFM}/MS10 From Mars/WAV"),
-    ("07_SYS100M_Roland", f"{SFM}/SYS100M From Mars/WAV"),
-    ("08_Voyetra",        f"{SFM}/Voyetra From Mars/WAV"),
-    ("09_VP330_Roland",   f"{SFM}/VP330 From Mars/WAV"),
-    ("10_Wasp_EDP",       f"{SFM}/Wasp From Mars/WAV"),
-    ("11_DX7_Yamaha",     f"{SFM}/DX From Mars/WAV/Individual Hits"),
-    ("12_DX100_Yamaha",   f"{SFM}/DX100 From Mars/WAV"),
-    ("13_Kawaii_Dreams",  f"{SFM}/Kawaii Dreams From Mars/WAV"),
-    ("14_Acid_TB303",     f"{SFM}/Acid From Mars/WAV/Acid Synths"),
-    ("15_Vinyl_Synths",   f"{SFM}/Vinyl Synths From Mars/WAV"),
-    ("16_Mirage_EMU",     f"{SFM}/Mirage From Mars/WAV"),
-    ("17_S612_EMU",       f"{SFM}/S612 From Mars/WAV/Synths"),
-    ("18_ARP_2600",       f"{SFM}/2600 From Mars/WAV/Instrument Samples"),
-]
+def build_super_banks(super_data, super_dir, dry_run):
+    """
+    Build cross-machine themed banks from already-exported kit files.
+    super_data: dict of type → [(machine_name, abs_path_to_exported_wav)]
+    Each bank gets ≤16 machines, evenly sampled if more.
+    """
+    for bank_type, entries in super_data.items():
+        if not entries:
+            continue
 
-KITS_BASS = [
-    ("01_808_F1LTHY",     f"{SMP}/F1LTHY x LUKRATIVE KIT [VOL II]/808s"),
-]
+        # Evenly sample to 16 machines
+        if len(entries) > 16:
+            step = len(entries) / 16
+            entries = [entries[int(i * step)] for i in range(16)]
 
-KITS_FX = [
-    ("01_Found_Sounds",      f"{SFM}/Found Sounds From Mars/WAV"),
-    ("02_Foley",             f"{SMP}/Big Room Sound Essential Foley Sounds"),
-    ("03_Tape_Fragments",    f"{SFM}/Tape Fragments From Mars/WAV"),
-    ("04_Trumpet_Fragments", f"{SFM}/Trumpet Fragments From Mars/WAV"),
-]
+        bank_name = f"SUPER_{bank_type.upper()}"
+        bank_dir  = os.path.join(super_dir, bank_name)
+        print(f"\n  {bank_name}  ({len(entries)} machines)")
 
-KITS_PERC = [
-    ("01_Underdog_Perc",  f"{SMP}/2023 Underdog ear candy"),
-]
+        if dry_run:
+            for machine, _ in entries:
+                print(f"    {machine}")
+            continue
 
-KITS_VOCAL = [
-    ("01_Afrobeat_Vocals", f"{SMP}/Ultra Afrobeat Vocals"),
-]
-
-KITS_MPC = [
-    ("01_MPC2000_Snacks",  f"{SFM}/MPC2000 Snacks From Mars/WAV"),
-    ("02_S950_Keys",       f"{SFM}/S950 Snacks From Mars/WAV/Keys"),
-]
-
-ALL_NON_DRUM = [
-    ("SYNTH",  KITS_SYNTH,  "synth"),
-    ("BASS",   KITS_BASS,   "bass"),
-    ("FX",     KITS_FX,     "fx"),
-    ("PERC",   KITS_PERC,   "perc"),
-    ("VOCAL",  KITS_VOCAL,  "vocal"),
-    ("MPC",    KITS_MPC,    "mpc"),
-]
+        os.makedirs(bank_dir, exist_ok=True)
+        for i, (machine, src) in enumerate(entries, 1):
+            label = sanitize(machine, 16)
+            dst   = os.path.join(bank_dir, f"{i:02d}_{label}.wav")
+            if os.path.exists(src):
+                shutil.copy(src, dst)
+                print(f"    {i:02d}_{label:<18} OK   {machine}")
+            else:
+                print(f"    {i:02d}_{label:<18} MISS {machine}")
 
 
-def main(build_drums=True, build_non_drum=True):
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    print(f"Output: {OUTPUT_DIR}\n")
+# ── Terminal UI ────────────────────────────────────────────────────────────────
 
-    total_kits = 0
-    total_samples = 0
+def _fmt_time(seconds):
+    m, s = divmod(int(seconds), 60)
+    return f"{m}:{s:02d}"
 
-    if build_drums:
-        print("=" * 60)
-        print("DRUM MACHINE KITS (46)")
-        print("=" * 60)
-        for name, root in KITS_MAIN:
-            print(f"\n{name}")
-            n = build_kit(name, root, is_special=False)
-            total_samples += n
-            total_kits += 1
 
-        print("\n" + "=" * 60)
-        print("SPECIAL / NON-STANDARD KITS (6)")
-        print("=" * 60)
-        for name, root in KITS_SPECIAL:
-            print(f"\n{name}")
-            n = build_kit(name, root, is_special=True)
-            total_samples += n
-            total_kits += 1
+class UI:
+    """
+    Split-screen TUI:
+      ┌─ scroll area ──────────────────────────────────┐  (normal terminal)
+      ├─ log box (16 lines) ───────────────────────────┤  last kit output
+      ├────────────────────────────────────────────────┤  separator
+      │ [████████░░░░░░] 23/95  3:14  eta 8:20  Name  │  progress bar
+      └────────────────────────────────────────────────┘
 
-    if build_non_drum:
-        for category_name, kit_list, subdir in ALL_NON_DRUM:
-            print("\n" + "=" * 60)
-            print(f"{category_name} KITS ({len(kit_list)})")
-            print("=" * 60)
-            for name, root in kit_list:
-                print(f"\n{name}")
-                n = build_synth_kit(name, root, subdir)
-                total_samples += n
-                total_kits += 1
+    Hijacks sys.stdout so all print() output is captured into a 16-line ring
+    buffer and rendered in the fixed log box. Falls back to plain text when
+    stdout is not a TTY.
+    """
+    LOG_H = 16   # lines in the log box
 
-    print(f"\n{'=' * 60}")
-    print(f"DONE — {total_kits} kits built, {total_samples} samples exported")
-    print(f"Output: {OUTPUT_DIR}")
+    def __init__(self, total):
+        self.total  = total
+        self.done   = 0
+        self.start  = time.time()
+        self._name  = ""
+        self._buf   = deque(maxlen=self.LOG_H)
+        self._cur   = ""           # incomplete current line
+        self._real  = sys.__stdout__
+        self._tty   = self._real.isatty()
+        self._rows  = 0
+        self._cols  = 80
+
+        if self._tty:
+            try:
+                sz = os.get_terminal_size(self._real.fileno())
+                self._rows, self._cols = sz.lines, sz.columns
+                # dashboard = top border + LOG_H lines + separator + bar = LOG_H+3
+                self._dash = self.LOG_H + 3
+                if self._rows > self._dash + 3:   # need at least 3 scroll rows
+                    self._setup()
+                else:
+                    self._tty = False
+            except OSError:
+                self._tty = False
+
+        sys.stdout = self   # hijack stdout
+
+    def _setup(self):
+        scroll_end = self._rows - self._dash
+        out = []
+        out.append(f"\033[1;{scroll_end}r")          # restrict scroll region
+        for r in range(scroll_end + 1, self._rows + 1):
+            out.append(f"\033[{r};1H\033[2K")        # clear dashboard area
+        out.append(f"\033[{scroll_end};1H")           # park cursor at scroll bottom
+        self._real.write("".join(out))
+        self._real.flush()
+        self._redraw()
+
+    def _bar_str(self):
+        W       = min(36, self._cols - 36)
+        pct     = self.done / self.total if self.total else 1.0
+        filled  = int(W * pct)
+        bar     = "█" * filled + "░" * (W - filled)
+        elapsed = time.time() - self.start
+        eta_s   = ""
+        if 0 < self.done < self.total:
+            eta   = elapsed / self.done * (self.total - self.done)
+            eta_s = f"  eta {_fmt_time(eta)}"
+        label = (self._name[:24] + "…") if len(self._name) > 25 else self._name
+        return f"[{bar}] {self.done}/{self.total}  {_fmt_time(elapsed)}{eta_s}  {label}"
+
+    def _redraw(self):
+        cols    = self._cols
+        r0      = self._rows - self._dash + 1   # first row of dashboard (top border)
+        lines   = list(self._buf)
+        out     = ["\033[s"]                     # save cursor
+
+        # top border
+        out.append(f"\033[{r0};1H\033[2K{'─' * cols}")
+
+        # log lines (fill empty rows with blank)
+        for i in range(self.LOG_H):
+            row  = r0 + 1 + i
+            text = (lines[i] if i < len(lines) else "")[:cols]
+            out.append(f"\033[{row};1H\033[2K{text}")
+
+        # separator + bar
+        sep_row = r0 + 1 + self.LOG_H
+        out.append(f"\033[{sep_row};1H\033[2K{'─' * cols}")
+        out.append(f"\033[{self._rows};1H\033[2K{self._bar_str()}")
+
+        out.append("\033[u")                     # restore cursor
+        self._real.write("".join(out))
+        self._real.flush()
+
+    # ── stdout proxy ─────────────────────────────────────────────────────────
+
+    def write(self, text):
+        if not self._tty:
+            self._real.write(text)
+            return
+        parts = text.split("\n")
+        self._cur += parts[0]
+        for part in parts[1:]:
+            self._buf.append(self._cur)
+            self._cur = part
+            self._redraw()
+
+    def flush(self):
+        self._real.flush()
+
+    # ── progress control ─────────────────────────────────────────────────────
+
+    def clear(self):
+        pass   # no-op — log box handles its own display
+
+    def update(self, name=""):
+        self.done  += 1
+        self._name  = name
+        if self._tty:
+            self._redraw()
+        else:
+            self._real.write(f"\r{self._bar_str()}\n")
+            self._real.flush()
+
+    def finish(self):
+        self.done  = self.total
+        self._name = ""
+        if self._tty and self._rows:
+            self._redraw()
+            # restore full scroll region; leave cursor at bottom
+            self._real.write(f"\033[1;{self._rows}r\033[{self._rows};1H\n")
+            self._real.flush()
+        else:
+            self._real.write(f"\r{self._bar_str()}\n")
+            self._real.flush()
+        sys.stdout = self._real   # restore stdout
+
+
+# ── Main ───────────────────────────────────────────────────────────────────────
+
+def dry_run_kit(audio_names, machine):
+    """Fast dry-run analysis using only file names (no extraction needed)."""
+    buckets = defaultdict(list)
+    unclassified = []
+    for name in audio_names:
+        t = classify(name)
+        (buckets[t] if t else unclassified).append(name)
+    is_drum = bool(buckets)
+    if is_drum:
+        filled = len(set(SLOT_NAMES) & set(buckets.keys()))
+        # account for unclassified filling empty slots
+        empty_slots = len(SLOT_NAMES) - filled
+        from_unclassified = min(len(unclassified), empty_slots)
+        filled += from_unclassified
+    else:
+        filled = min(len(audio_names), len(SLOT_NAMES))
+    empty = len(SLOT_NAMES) - filled
+    tag   = "(drum)" if is_drum else "(synth-spread)"
+    print(f"    {filled:2d}/12 filled  {empty} silent  {tag}")
+    return is_drum
+
+
+def show_status():
+    """Print how many kits are built vs total, then exit."""
+    all_zips = sorted(SRC_DIR.glob("*.zip"))
+    total = len(all_zips)
+    drumkit_dir = DST_DIR / "drumkit"
+    built = 0
+    if drumkit_dir.exists():
+        for z in all_zips:
+            kit = drumkit_dir / z.stem
+            if kit.is_dir() and any(f.suffix == '.wav' for f in kit.iterdir()):
+                built += 1
+    pct = built * 100 // total if total else 0
+    print(f"Status : {built}/{total} kits built ({pct}%)")
+    print(f"Remaining : {total - built}")
+    # Per-batch breakdown
+    for batch_num, letters in BATCHES.items():
+        batch_zips = [z for z in all_zips if z.stem[0].lower() in letters]
+        b_built = sum(
+            1 for z in batch_zips
+            if (drumkit_dir / z.stem).is_dir()
+            and any(f.suffix == '.wav' for f in (drumkit_dir / z.stem).iterdir())
+        ) if drumkit_dir.exists() else 0
+        status = "✅" if b_built == len(batch_zips) else ("🔄" if b_built > 0 else "⬜")
+        print(f"  Batch {batch_num}: {b_built:3d}/{len(batch_zips)} {status}")
+    super_dir = DST_DIR / "super"
+    super_status = "✅" if super_dir.exists() and any(super_dir.iterdir()) else "⬜"
+    print(f"  Super banks: {super_status}")
+
+
+def main():
+    dry_run    = "--dry-run"    in sys.argv
+    super_only = "--super-only" in sys.argv
+    status_only= "--status"     in sys.argv
+
+    batch_num = None
+    args = sys.argv[1:]
+    for i, a in enumerate(args):
+        if a == "--batch" and i + 1 < len(args):
+            batch_num = int(args[i + 1])
+            break
+        if a.startswith("--batch="):
+            batch_num = int(a.split("=", 1)[1])
+            break
+
+    if status_only:
+        show_status()
+        return
+
+    filters = [a for a in sys.argv[1:]
+               if not a.startswith("--") and not (
+                   len(sys.argv) > sys.argv.index(a) - 1
+                   and sys.argv[sys.argv.index(a) - 1] == "--batch"
+               )]
+    # cleaner filter extraction: skip the value after --batch
+    filters = []
+    skip_next = False
+    for a in sys.argv[1:]:
+        if skip_next:
+            skip_next = False
+            continue
+        if a == "--batch":
+            skip_next = True
+            continue
+        if not a.startswith("--"):
+            filters.append(a)
+
+    # ── Resolve src / dst (CLI overrides defaults) ────────────────────────────
+    src_dir = SRC_DIR
+    dst_dir = DST_DIR
+    for i, a in enumerate(args):
+        if a == "--src" and i + 1 < len(args):
+            src_dir = Path(args[i + 1])
+        if a == "--dst" and i + 1 < len(args):
+            dst_dir = Path(args[i + 1])
+
+    # ── Discover packs: .zip files OR unzipped subdirectories ─────────────────
+    # When both exist for the same stem, --unzipped picks dirs, default picks zips.
+    use_unzipped = "--unzipped" in sys.argv
+
+    if use_unzipped:
+        # Only scan directories (skip rglob cost by trusting dirs without audio check)
+        packs = sorted(
+            p for p in src_dir.iterdir()
+            if p.is_dir() and not p.name.startswith('.')
+        )
+    else:
+        packs = sorted(src_dir.glob("*.zip"))
+
+    if batch_num is not None:
+        letters = BATCHES.get(batch_num, set())
+        packs = [p for p in packs if p.stem[0].lower() in letters]
+    elif filters:
+        packs = [p for p in packs if any(f.lower() in p.name.lower() for f in filters)]
+
+    src_type = "unzipped folders" if use_unzipped else "zip archives"
+    print(f"Source : {src_dir}  ({src_type})")
+    print(f"Output : {dst_dir}")
+    print(f"Packs  : {len(packs)}{f'  (batch {batch_num})' if batch_num else ''}")
+    print(f"Mode   : {'DRY RUN' if dry_run else ('SUPER ONLY' if super_only else 'BUILD')}\n")
+
+    ui = None if dry_run else UI(len(packs))
+
+    if not dry_run:
+        for sub in ("drumkit", "blocks", "super"):
+            (dst_dir / sub).mkdir(parents=True, exist_ok=True)
+        make_silent_wav(SILENT_WAV)
+
+    super_data  = defaultdict(list)  # type → [(machine_name, abs_path)]
+    total_ok    = 0
+    total_skip  = 0
+    dry_drum    = 0
+    dry_synth   = 0
+
+    # --super-only: collect from already-built kits then jump to super banks
+    if super_only:
+        for kit_path in sorted((dst_dir / "drumkit").iterdir()):
+            if not kit_path.is_dir():
+                continue
+            for stype, fname in SUPER_FILES.items():
+                fpath = kit_path / fname
+                if fpath.exists():
+                    super_data[stype].append((kit_path.name, str(fpath)))
+        print(f"Collected super data from existing kits:")
+        for stype, entries in super_data.items():
+            print(f"  {stype}: {len(entries)} machines")
+        print()
+        build_super_banks(super_data, str(dst_dir / "super"), dry_run=False)
+        print("\nDone — super banks built.")
+        return
+
+    for pack in packs:
+        machine = pack.stem
+
+        if ui: ui.clear()
+
+        try:
+            audio_names = list_audio(pack)
+        except Exception as e:
+            print(f"[SKIP] {machine}: {e}")
+            total_skip += 1
+            if ui: ui.update(machine)
+            continue
+
+        n = len(audio_names)
+        if n == 0:
+            print(f"[SKIP] {machine}: no audio files")
+            total_skip += 1
+            if ui: ui.update(machine)
+            continue
+
+        tier = 1 if n <= 16 else (2 if n < TIER_BLOCK else 4)
+        print(f"\n{'─' * 60}")
+        print(f"  [{n:4d} files  T{tier}]  {machine}")
+
+        if dry_run:
+            is_drum = dry_run_kit(audio_names, machine)
+            if is_drum:
+                dry_drum += 1
+            else:
+                dry_synth += 1
+            if tier == 4:
+                # Show which blocks would be built
+                buckets = defaultdict(list)
+                for name in audio_names:
+                    t = classify(name)
+                    if t:
+                        buckets[t].append(name)
+                groups = {
+                    "KICKS":  len(buckets.get("kick", [])),
+                    "SNARES": len(buckets.get("snare", [])),
+                    "HATS":   len(buckets.get("closed_hh", []) + buckets.get("open_hh", [])),
+                    "TOMS":   len(buckets.get("low_tom", []) + buckets.get("mid_tom", []) +
+                                  buckets.get("hi_tom", [])),
+                    "CLAPS":  len(buckets.get("clap", [])),
+                    "PERC":   len(buckets.get("perc", []) + buckets.get("rim", []) +
+                                  buckets.get("cowbell", []) + buckets.get("crash", [])),
+                }
+                for bname, cnt in groups.items():
+                    if cnt:
+                        capped = min(cnt, 16)
+                        print(f"    BLOCK {bname:<8} {capped:2d} files")
+            total_ok += 1
+            continue
+
+        # ── Real build ────────────────────────────────────────────────────────
+        kit_dir = str(dst_dir / "drumkit" / machine)
+
+        # Skip already-built kits (resume support)
+        if os.path.isdir(kit_dir) and any(
+            f.endswith('.wav') for f in os.listdir(kit_dir)
+        ):
+            print(f"  [SKIP] already built — {machine}")
+            # Still collect super bank files from existing kit
+            for stype, fname in SUPER_FILES.items():
+                fpath = os.path.join(kit_dir, fname)
+                if os.path.exists(fpath):
+                    super_data[stype].append((machine, fpath))
+            total_ok += 1
+            if ui: ui.update(machine)
+            continue
+
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                audio_files = extract_audio(pack, tmp)
+            except Exception as e:
+                print(f"  [FAIL] extract: {e}")
+                total_skip += 1
+                if ui: ui.update(machine)
+                continue
+
+            build_kit(audio_files, kit_dir, dry_run=False)
+
+            if tier == 4:
+                build_blocks(audio_files, machine,
+                             str(dst_dir / "blocks"), dry_run=False)
+
+        # Collect already-exported files for super banks (temp dir is gone)
+        for stype, fname in SUPER_FILES.items():
+            fpath = os.path.join(kit_dir, fname)
+            if os.path.exists(fpath):
+                super_data[stype].append((machine, fpath))
+
+        total_ok += 1
+        if ui: ui.update(machine)
+
+    if dry_run:
+        print(f"\n{'═' * 60}")
+        print(f"DRY RUN SUMMARY")
+        print(f"  {total_ok} kits scanned  ({dry_drum} drum, {dry_synth} synth-spread)")
+        print(f"  {total_skip} skipped")
+        print(f"  Run without --dry-run to build.")
+        return
+
+    if ui: ui.finish()
+    print(f"\n{'═' * 60}")
+    print("BUILDING SUPER BANKS")
+    print('═' * 60)
+    build_super_banks(super_data, str(dst_dir / "super"), dry_run=False)
+
+    print(f"\n{'═' * 60}")
+    print(f"DONE — {total_ok} kits, {total_skip} skipped")
+    print(f"Output : {dst_dir}")
 
 
 if __name__ == "__main__":
-    import sys
-    args = sys.argv[1:]
-
-    # Flags: --drums / --non-drum / --all (default: --all)
-    build_drums    = "--drums"    in args or "--all" in args or not args
-    build_non_drum = "--non-drum" in args or "--all" in args or not args
-
-    # Kit-prefix filter (e.g. python make_kits.py 03 12 14)
-    targets = [a for a in args if not a.startswith("--")]
-    if targets:
-        KITS_MAIN[:]    = [(n, r) for n, r in KITS_MAIN    if any(n.startswith(t) for t in targets)]
-        KITS_SPECIAL[:] = [(n, r) for n, r in KITS_SPECIAL if any(n.startswith(t) for t in targets)]
-        for _, kit_list, _ in ALL_NON_DRUM:
-            kit_list[:] = [(n, r) for n, r in kit_list if any(n.startswith(t) for t in targets)]
-        build_drums    = bool(KITS_MAIN or KITS_SPECIAL)
-        build_non_drum = any(kit_list for _, kit_list, _ in ALL_NON_DRUM)
-
-    main(build_drums=build_drums, build_non_drum=build_non_drum)
+    main()
