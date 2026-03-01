@@ -11,15 +11,15 @@ Output : /Volumes/eight/MUSIC_PRODUCTION/SP404MK2_DRUMKITS/
 Audio format : 16-bit / 48 kHz / mono WAV  (matches existing SP-404MK2 kits)
 
 Pad layout (drag-and-drop ready — already pre-reordered like reorder_kits.py):
-  File 01-04 → silent pads   → pads 13-16 (top row, empty)
-  File 05 rim       → pad 9     File 13 kick      → pad 1 ✓
-  File 06 clap      → pad 10    File 14 snare     → pad 2
-  File 07 cowbell   → pad 11    File 15 closed_hh → pad 3
-  File 08 perc      → pad 12    File 16 open_hh   → pad 4
-  File 09 low_tom   → pad 5
-  File 10 mid_tom   → pad 6
-  File 11 hi_tom    → pad 7
-  File 12 crash     → pad 8
+  File 01-04 → silent pads   → pads 1-4   (top row, empty)
+  File 05 rim       → pad 5     File 13 kick      → pad 13 ✓
+  File 06 clap      → pad 6     File 14 snare     → pad 14
+  File 07 cowbell   → pad 7     File 15 closed_hh → pad 15
+  File 08 perc      → pad 8     File 16 open_hh   → pad 16
+  File 09 low_tom   → pad 9
+  File 10 mid_tom   → pad 10
+  File 11 hi_tom    → pad 11
+  File 12 crash     → pad 12
 
 Tier logic:
   Tier 1 (≤16 files)  : extract all sounds, classify each to its slot
@@ -586,7 +586,66 @@ def show_status():
     print(f"  Super banks: {super_status}")
 
 
+HELP = """\
+make_kits.py — Build SP-404 MK2 drum kits from a sample pack archive.
+
+Scans a source directory of .zip files (or unzipped subfolders), classifies
+every audio file by drum type (kick, snare, hi-hat, etc.), picks one best
+representative per slot, and exports a drag-and-drop-ready 16-pad kit for
+each machine. Also builds per-category blocks for large packs and cross-
+machine super banks after all kits are done.
+
+Default source : /Volumes/eight/ff/
+Default output : /Volumes/eight/MUSIC_PRODUCTION/SP404MK2_DRUMKITS/
+
+Pad layout (file number = pad number, top-left to bottom-right):
+  01-04  silent  → pads 1-4   (top row, empty)
+  05 rim          → pad 5     13 kick      → pad 13 ✓
+  06 clap         → pad 6     14 snare     → pad 14
+  07 cowbell      → pad 7     15 closed_hh → pad 15
+  08 perc         → pad 8     16 open_hh   → pad 16
+  09 low_tom      → pad 9
+  10 mid_tom      → pad 10
+  11 hi_tom       → pad 11
+  12 crash        → pad 12
+
+Output folders:
+  drumkit/  — one 16-pad kit per pack (always 16 WAVs, silent fill for empty slots)
+  blocks/   — per-category banks for packs with ≥100 audio files
+  super/    — cross-pack themed banks: SUPER_KICK, SUPER_SNARE, etc.
+
+Tier logic:
+  ≤16 files   — all sounds used, classified to their slots
+  17-99 files — one best-per-type (middle of sorted candidates)
+  ≥100 files  — same + per-category blocks (kicks, snares, hats, toms, perc)
+
+Usage:
+  python make_kits.py                        build all packs
+  python make_kits.py --dry-run              scan only, no file output
+  python make_kits.py --status               show built vs total, then exit
+  python make_kits.py --super-only           rebuild super banks from existing kits
+  python make_kits.py --batch 1              batch 1 only (letters 4,A,B — 58 kits)
+  python make_kits.py --batch 2              batch 2 (C,D,E — 89 kits)
+  python make_kits.py --batch 3              batch 3 (F–L — 95 kits)
+  python make_kits.py --batch 4              batch 4 (M–R — 104 kits)
+  python make_kits.py --batch 5              batch 5 (S–W — 57 kits)
+  python make_kits.py --batch 6              batch 6 (Y,Z — 67 kits)
+  python make_kits.py Roland Boss            only packs matching any filter word
+  python make_kits.py --src /path/to/packs   override source directory
+  python make_kits.py --dst /path/to/output  override output directory
+  python make_kits.py --unzipped             source contains unzipped subfolders
+  python make_kits.py --help                 show this message
+
+Re-running is safe — already-built kits are skipped automatically.
+Audio output: 16-bit / 48 kHz / mono WAV.
+"""
+
+
 def main():
+    if "--help" in sys.argv or "-h" in sys.argv:
+        print(HELP)
+        return
+
     dry_run    = "--dry-run"    in sys.argv
     super_only = "--super-only" in sys.argv
     status_only= "--status"     in sys.argv

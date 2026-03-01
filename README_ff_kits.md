@@ -15,23 +15,25 @@ Each machine gets its own folder (`Roland TR-808/`, `Akai MPC3000/`, …).
 Inside: 16 WAV files, numbered and named so drag-and-drop into the Roland app
 lands on the right pads immediately — no manual re-ordering needed.
 
+File number = pad number (top-left → bottom-right):
+
 ```
-01_empty.wav   → pad 13 (top-left,  silent)
-02_empty.wav   → pad 14 (top,       silent)
-03_empty.wav   → pad 15 (top,       silent)
-04_empty.wav   → pad 16 (top-right, silent)
-05_rim.wav     → pad 9
-06_clap.wav    → pad 10
-07_cowbell.wav → pad 11
-08_perc.wav    → pad 12
-09_low_tom.wav → pad 5
-10_mid_tom.wav → pad 6
-11_hi_tom.wav  → pad 7
-12_crash.wav   → pad 8
-13_kick.wav    → pad 1  ← bottom-left ✓
-14_snare.wav   → pad 2
-15_closed_hh.wav → pad 3
-16_open_hh.wav → pad 4
+01_empty.wav     → pad  1 (top-left,  silent)
+02_empty.wav     → pad  2 (top,       silent)
+03_empty.wav     → pad  3 (top,       silent)
+04_empty.wav     → pad  4 (top-right, silent)
+05_rim.wav       → pad  5
+06_clap.wav      → pad  6
+07_cowbell.wav   → pad  7
+08_perc.wav      → pad  8
+09_low_tom.wav   → pad  9
+10_mid_tom.wav   → pad 10
+11_hi_tom.wav    → pad 11
+12_crash.wav     → pad 12
+13_kick.wav      → pad 13 ← bottom-left ✓
+14_snare.wav     → pad 14
+15_closed_hh.wav → pad 15
+16_open_hh.wav   → pad 16
 ```
 
 **Tier logic** (how sounds are chosen):
@@ -67,9 +69,6 @@ blocks/
 **Machines that get blocks:** Roland MC-909 (849 files), Roland TR-909 (474),
 Alesis SR16 (237), and any other machine with ≥ 100 audio files.
 
-Use blocks when you want to pick your favourite kick from a machine's full library,
-or load a whole bank of just snares for layering.
-
 ---
 
 ## super/
@@ -93,24 +92,51 @@ super/
 Files are named `01_Roland_TR-808.wav`, `02_Akai_MPC3000.wav`, … so you always
 know which machine a sound came from.
 
-**Use case:** instant access to a curated cross-section of classic drum machine
-sounds — great for building kits by mixing and matching across eras and machines.
-
 ---
 
-## Building / resuming
+## Scripts
+
+### make_kits.py
+
+Builds all kits from the FF archive. Run `python make_kits.py --help` for full usage.
 
 ```bash
 cd /Users/gio/dev/music/sp404mk2
 
-python make_kits_ff.py --status          # check progress
-python make_kits_ff.py --batch 1         # 4, A, B  (58 kits)
-python make_kits_ff.py --batch 2         # C, D, E  (89 kits)
-python make_kits_ff.py --batch 3         # F–L      (95 kits)
-python make_kits_ff.py --batch 4         # M–R     (104 kits)
-python make_kits_ff.py --batch 5         # S–W      (57 kits)
-python make_kits_ff.py --batch 6         # Y, Z     (67 kits)
-python make_kits_ff.py --super-only      # build super banks after all batches
+python make_kits.py --status          # check progress
+python make_kits.py --batch 1         # 4, A, B  (58 kits)
+python make_kits.py --batch 2         # C, D, E  (89 kits)
+python make_kits.py --batch 3         # F–L      (95 kits)
+python make_kits.py --batch 4         # M–R     (104 kits)
+python make_kits.py --batch 5         # S–W      (57 kits)
+python make_kits.py --batch 6         # Y, Z     (67 kits)
+python make_kits.py --super-only      # build super banks after all batches
 ```
 
 Re-running a batch is safe — already-built kits are skipped automatically.
+
+### reorder_kits.py
+
+Reorders existing kits (not built by `make_kits.py`) so drag-and-drop into the
+Roland app places sounds on the correct pads. Renames files and adds 4 silent
+top-row placeholders. Run `python reorder_kits.py --help` for full usage.
+
+```bash
+python reorder_kits.py    # process all unordered kits under KITS_DIR
+```
+
+Kits that already have `01_empty.wav` are skipped automatically.
+
+### make_breakbeats.py
+
+Scans a Cymatics (or any) sample library for loop audio files under 1 MB —
+breakbeats, drum loops, percussion loops — and organises them into 16-pad
+SP-404 MK2 banks. Each source subfolder becomes one bank, evenly sampled to
+16 files. Run `python make_breakbeats.py --help` for full usage.
+
+```bash
+python make_breakbeats.py --dry-run   # scan only, no file output
+python make_breakbeats.py --status    # show built vs total
+python make_breakbeats.py             # build all banks
+python make_breakbeats.py --src /path/to/samples --dst /path/to/output
+```

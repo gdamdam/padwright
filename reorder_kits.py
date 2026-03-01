@@ -6,11 +6,11 @@ The Roland app fills pads top-left → right → down (pad 13 first, pad 1 last)
 We rename files so kick/snare/hats end up on the BOTTOM ROW (pads 1-4),
 and add 4 silent WAV placeholders for the TOP ROW (pads 13-16).
 
-Result layout on device:
-  [01_empty][02_empty][03_empty][04_empty]  ← top row  (pad 13-16, silent)
-  [05_rim  ][06_clap ][07_cowbl][08_perc ]  ← row 3    (pad  9-12)
-  [09_lo_tm][10_md_tm][11_hi_tm][12_crash]  ← row 2    (pad  5-8 )
-  [13_kick ][14_snare][15_cl_hh][16_op_hh]  ← bottom   (pad  1-4 ) ← kick ✓
+Result layout on device (file number = pad number):
+  [01_empty][02_empty][03_empty][04_empty]  ← top row   (pads  1-4,  silent)
+  [05_rim  ][06_clap ][07_cowbl][08_perc ]  ← row 2     (pads  5-8 )
+  [09_lo_tm][10_md_tm][11_hi_tm][12_crash]  ← row 3     (pads  9-12)
+  [13_kick ][14_snare][15_cl_hh][16_op_hh]  ← bottom    (pads 13-16) ← kick ✓
 """
 
 import os
@@ -23,18 +23,18 @@ SILENT_WAV = "/tmp/sp404_empty.wav"
 
 # Old prefix → New prefix  (for files named NN_name.wav)
 REMAP = {
-    "01": "13",   # kick      → pad 1  (bottom-left)
-    "02": "14",   # snare     → pad 2
-    "03": "15",   # closed_hh → pad 3
-    "04": "16",   # open_hh   → pad 4
-    "05": "09",   # low_tom   → pad 5
-    "06": "10",   # mid_tom   → pad 6
-    "07": "11",   # hi_tom    → pad 7
-    "08": "12",   # crash     → pad 8
-    "09": "05",   # rim       → pad 9
-    "10": "06",   # clap      → pad 10
-    "11": "07",   # cowbell   → pad 11
-    "12": "08",   # perc      → pad 12
+    "01": "13",   # kick      → pad 13 (bottom-left)
+    "02": "14",   # snare     → pad 14
+    "03": "15",   # closed_hh → pad 15
+    "04": "16",   # open_hh   → pad 16
+    "05": "09",   # low_tom   → pad 9
+    "06": "10",   # mid_tom   → pad 10
+    "07": "11",   # hi_tom    → pad 11
+    "08": "12",   # crash     → pad 12
+    "09": "05",   # rim       → pad 5
+    "10": "06",   # clap      → pad 6
+    "11": "07",   # cowbell   → pad 7
+    "12": "08",   # perc      → pad 8
 }
 
 
@@ -91,7 +91,52 @@ def find_kit_dirs(base):
     return sorted(kit_dirs)
 
 
+HELP = """\
+reorder_kits.py — Reorder SP-404 MK2 kit files for correct drag-and-drop placement.
+
+The Roland SP-404 MK2 app fills pads top-left → right → down (pad 13 first,
+pad 1 last). This script renames files so kick/snare/hats land on the BOTTOM
+ROW (pads 1-4) and adds 4 silent WAV placeholders for the TOP ROW (pads 13-16).
+
+Use this on kits that were NOT built by make_kits.py (which already applies this
+layout). Kits that already have 01_empty.wav are skipped automatically.
+
+Default input : /Volumes/eight/MUSIC_PRODUCTION/SAMPLES_SP404MK2/
+
+Remapping applied (file number = pad number after rename):
+  01_kick.wav      → 13_kick.wav      (pad 13, bottom-left)
+  02_snare.wav     → 14_snare.wav     (pad 14)
+  03_closed_hh.wav → 15_closed_hh.wav (pad 15)
+  04_open_hh.wav   → 16_open_hh.wav   (pad 16)
+  05_low_tom.wav   → 09_low_tom.wav   (pad 9)
+  06_mid_tom.wav   → 10_mid_tom.wav   (pad 10)
+  07_hi_tom.wav    → 11_hi_tom.wav    (pad 11)
+  08_crash.wav     → 12_crash.wav     (pad 12)
+  09_rim.wav       → 05_rim.wav       (pad 5)
+  10_clap.wav      → 06_clap.wav      (pad 6)
+  11_cowbell.wav   → 07_cowbell.wav   (pad 7)
+  12_perc.wav      → 08_perc.wav      (pad 8)
+
+After renaming, 4 silent placeholders are added:
+  01_empty.wav → pad 1  (top-left, silent)
+  02_empty.wav → pad 2
+  03_empty.wav → pad 3
+  04_empty.wav → pad 4  (top-right, silent)
+
+Usage:
+  python reorder_kits.py        process all unordered kits under the default dir
+  python reorder_kits.py --help show this message
+
+To change the kits directory, edit KITS_DIR at the top of the script.
+"""
+
+
 def main():
+    import sys
+    if "--help" in sys.argv or "-h" in sys.argv:
+        print(HELP)
+        return
+
     print("Generating silent WAV placeholder...")
     make_silent_wav(SILENT_WAV)
 
