@@ -43,7 +43,7 @@ Usage:
 
 import os, re, sys, shutil, subprocess, tempfile, time, wave, zipfile
 from pathlib import Path
-from collections import defaultdict
+from collections import defaultdict, deque
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 SRC_DIR    = Path("/Volumes/eight/ff")
@@ -350,89 +350,145 @@ def build_super_banks(super_data, super_dir, dry_run):
                 print(f"    {i:02d}_{label:<18} MISS {machine}")
 
 
-# ── Progress bar ───────────────────────────────────────────────────────────────
+# ── Terminal UI ────────────────────────────────────────────────────────────────
 
 def _fmt_time(seconds):
     m, s = divmod(int(seconds), 60)
     return f"{m}:{s:02d}"
 
 
-class ProgressBar:
+class UI:
     """
-    Sticky-bottom progress bar on stderr.
+    Split-screen TUI:
+      ┌─ scroll area ──────────────────────────────────┐  (normal terminal)
+      ├─ log box (16 lines) ───────────────────────────┤  last kit output
+      ├────────────────────────────────────────────────┤  separator
+      │ [████████░░░░░░] 23/95  3:14  eta 8:20  Name  │  progress bar
+      └────────────────────────────────────────────────┘
 
-    Uses ANSI scroll-region to pin the bar to the last terminal row so that
-    stdout kit output scrolls above it without pushing the bar off screen.
-    Falls back to simple \\r mode when stderr is not a TTY (e.g. piped).
+    Hijacks sys.stdout so all print() output is captured into a 16-line ring
+    buffer and rendered in the fixed log box. Falls back to plain text when
+    stdout is not a TTY.
     """
-    WIDTH = 36
+    LOG_H = 16   # lines in the log box
 
     def __init__(self, total):
-        self.total = total
-        self.done  = 0
-        self.start = time.time()
-        self._tty  = sys.stderr.isatty()
-        self._rows = 0
+        self.total  = total
+        self.done   = 0
+        self.start  = time.time()
+        self._name  = ""
+        self._buf   = deque(maxlen=self.LOG_H)
+        self._cur   = ""           # incomplete current line
+        self._real  = sys.__stdout__
+        self._tty   = self._real.isatty()
+        self._rows  = 0
+        self._cols  = 80
+
         if self._tty:
             try:
-                self._rows = os.get_terminal_size().lines
-                # Restrict scrolling to rows 1..N-1; last row is reserved for bar
-                sys.stderr.write(
-                    f"\033[1;{self._rows - 1}r"   # set scroll region
-                    f"\033[{self._rows - 1};1H"   # park cursor just above bar
-                )
-                sys.stderr.flush()
-                self._draw_bar()
+                sz = os.get_terminal_size(self._real.fileno())
+                self._rows, self._cols = sz.lines, sz.columns
+                # dashboard = top border + LOG_H lines + separator + bar = LOG_H+3
+                self._dash = self.LOG_H + 3
+                if self._rows > self._dash + 3:   # need at least 3 scroll rows
+                    self._setup()
+                else:
+                    self._tty = False
             except OSError:
                 self._tty = False
 
-    def _render(self, name=""):
-        pct    = self.done / self.total if self.total else 1.0
-        filled = int(self.WIDTH * pct)
-        bar    = "█" * filled + "░" * (self.WIDTH - filled)
-        elapsed = time.time() - self.start
-        if 0 < self.done < self.total:
-            eta     = elapsed / self.done * (self.total - self.done)
-            eta_str = f"  eta {_fmt_time(eta)}"
-        else:
-            eta_str = ""
-        label = (name[:26] + "…") if len(name) > 27 else name
-        return f"[{bar}] {self.done}/{self.total}  {_fmt_time(elapsed)}{eta_str}  {label}"
+        sys.stdout = self   # hijack stdout
 
-    def _draw_bar(self, name=""):
-        # Save cursor → jump to last row → clear → draw → restore cursor
-        sys.stderr.write(
-            f"\033[s"
-            f"\033[{self._rows};1H\033[2K"
-            f"{self._render(name)}"
-            f"\033[u"
-        )
-        sys.stderr.flush()
+    def _setup(self):
+        scroll_end = self._rows - self._dash
+        out = []
+        out.append(f"\033[1;{scroll_end}r")          # restrict scroll region
+        for r in range(scroll_end + 1, self._rows + 1):
+            out.append(f"\033[{r};1H\033[2K")        # clear dashboard area
+        out.append(f"\033[{scroll_end};1H")           # park cursor at scroll bottom
+        self._real.write("".join(out))
+        self._real.flush()
+        self._redraw()
+
+    def _bar_str(self):
+        W       = min(36, self._cols - 36)
+        pct     = self.done / self.total if self.total else 1.0
+        filled  = int(W * pct)
+        bar     = "█" * filled + "░" * (W - filled)
+        elapsed = time.time() - self.start
+        eta_s   = ""
+        if 0 < self.done < self.total:
+            eta   = elapsed / self.done * (self.total - self.done)
+            eta_s = f"  eta {_fmt_time(eta)}"
+        label = (self._name[:24] + "…") if len(self._name) > 25 else self._name
+        return f"[{bar}] {self.done}/{self.total}  {_fmt_time(elapsed)}{eta_s}  {label}"
+
+    def _redraw(self):
+        cols    = self._cols
+        r0      = self._rows - self._dash + 1   # first row of dashboard (top border)
+        lines   = list(self._buf)
+        out     = ["\033[s"]                     # save cursor
+
+        # top border
+        out.append(f"\033[{r0};1H\033[2K{'─' * cols}")
+
+        # log lines (fill empty rows with blank)
+        for i in range(self.LOG_H):
+            row  = r0 + 1 + i
+            text = (lines[i] if i < len(lines) else "")[:cols]
+            out.append(f"\033[{row};1H\033[2K{text}")
+
+        # separator + bar
+        sep_row = r0 + 1 + self.LOG_H
+        out.append(f"\033[{sep_row};1H\033[2K{'─' * cols}")
+        out.append(f"\033[{self._rows};1H\033[2K{self._bar_str()}")
+
+        out.append("\033[u")                     # restore cursor
+        self._real.write("".join(out))
+        self._real.flush()
+
+    # ── stdout proxy ─────────────────────────────────────────────────────────
+
+    def write(self, text):
+        if not self._tty:
+            self._real.write(text)
+            return
+        parts = text.split("\n")
+        self._cur += parts[0]
+        for part in parts[1:]:
+            self._buf.append(self._cur)
+            self._cur = part
+            self._redraw()
+
+    def flush(self):
+        self._real.flush()
+
+    # ── progress control ─────────────────────────────────────────────────────
 
     def clear(self):
-        pass  # no-op: sticky bar doesn't need clearing before kit output
+        pass   # no-op — log box handles its own display
 
     def update(self, name=""):
-        self.done += 1
+        self.done  += 1
+        self._name  = name
         if self._tty:
-            self._draw_bar(name)
+            self._redraw()
         else:
-            sys.stderr.write(f"\r{self._render(name)}")
-            sys.stderr.flush()
+            self._real.write(f"\r{self._bar_str()}\n")
+            self._real.flush()
 
     def finish(self):
-        self.done = self.total
+        self.done  = self.total
+        self._name = ""
         if self._tty and self._rows:
-            # Draw final bar, restore full scroll region, move past bar
-            sys.stderr.write(
-                f"\033[s"
-                f"\033[{self._rows};1H\033[2K{self._render()}"
-                f"\033[u"
-                f"\033[1;{self._rows}r"           # restore full scroll region
-            )
+            self._redraw()
+            # restore full scroll region; leave cursor at bottom
+            self._real.write(f"\033[1;{self._rows}r\033[{self._rows};1H\n")
+            self._real.flush()
         else:
-            sys.stderr.write(f"\r{self._render()}\n")
-        sys.stderr.flush()
+            self._real.write(f"\r{self._bar_str()}\n")
+            self._real.flush()
+        sys.stdout = self._real   # restore stdout
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -529,7 +585,7 @@ def main():
     print(f"Zips   : {len(zips)}{f'  (batch {batch_num})' if batch_num else ''}")
     print(f"Mode   : {'DRY RUN' if dry_run else ('SUPER ONLY' if super_only else 'BUILD')}\n")
 
-    pb = None if dry_run else ProgressBar(len(zips))
+    ui = None if dry_run else UI(len(zips))
 
     if not dry_run:
         for sub in ("drumkit", "blocks", "super"):
@@ -562,21 +618,21 @@ def main():
     for zip_path in zips:
         machine = zip_path.stem
 
-        if pb: pb.clear()
+        if ui: ui.clear()
 
         try:
             audio_names = list_audio(zip_path)
         except Exception as e:
             print(f"[SKIP] {machine}: {e}")
             total_skip += 1
-            if pb: pb.update(machine)
+            if ui: ui.update(machine)
             continue
 
         n = len(audio_names)
         if n == 0:
             print(f"[SKIP] {machine}: no audio files")
             total_skip += 1
-            if pb: pb.update(machine)
+            if ui: ui.update(machine)
             continue
 
         tier = 1 if n <= 16 else (2 if n < TIER_BLOCK else 4)
@@ -627,7 +683,7 @@ def main():
                 if os.path.exists(fpath):
                     super_data[stype].append((machine, fpath))
             total_ok += 1
-            if pb: pb.update(machine)
+            if ui: ui.update(machine)
             continue
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -636,7 +692,7 @@ def main():
             except Exception as e:
                 print(f"  [FAIL] extract: {e}")
                 total_skip += 1
-                if pb: pb.update(machine)
+                if ui: ui.update(machine)
                 continue
 
             build_kit(audio_files, kit_dir, is_small=(n <= 16), dry_run=False)
@@ -652,7 +708,7 @@ def main():
                 super_data[stype].append((machine, fpath))
 
         total_ok += 1
-        if pb: pb.update(machine)
+        if ui: ui.update(machine)
 
     if dry_run:
         print(f"\n{'═' * 60}")
@@ -662,7 +718,7 @@ def main():
         print(f"  Run without --dry-run to build.")
         return
 
-    if pb: pb.finish()
+    if ui: ui.finish()
     print(f"\n{'═' * 60}")
     print("BUILDING SUPER BANKS")
     print('═' * 60)
