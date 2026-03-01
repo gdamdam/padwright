@@ -633,16 +633,17 @@ def main():
             dst_dir = Path(args[i + 1])
 
     # ── Discover packs: .zip files OR unzipped subdirectories ─────────────────
-    packs = []
-    for p in sorted(src_dir.iterdir()):
-        if p.name.startswith('.'):
-            continue
-        if p.suffix.lower() == '.zip':
-            packs.append(p)
-        elif p.is_dir():
-            if any(f.suffix.lower() in _AUDIO_EXTS
-                   for f in p.rglob('*') if f.is_file() and not f.name.startswith('.')):
-                packs.append(p)
+    # When both exist for the same stem, --unzipped picks dirs, default picks zips.
+    use_unzipped = "--unzipped" in sys.argv
+
+    if use_unzipped:
+        # Only scan directories (skip rglob cost by trusting dirs without audio check)
+        packs = sorted(
+            p for p in src_dir.iterdir()
+            if p.is_dir() and not p.name.startswith('.')
+        )
+    else:
+        packs = sorted(src_dir.glob("*.zip"))
 
     if batch_num is not None:
         letters = BATCHES.get(batch_num, set())
@@ -650,8 +651,8 @@ def main():
     elif filters:
         packs = [p for p in packs if any(f.lower() in p.name.lower() for f in filters)]
 
-    src_type = "zip" if packs and packs[0].suffix.lower() == '.zip' else "folder"
-    print(f"Source : {src_dir}  ({src_type}s)")
+    src_type = "unzipped folders" if use_unzipped else "zip archives"
+    print(f"Source : {src_dir}  ({src_type})")
     print(f"Output : {dst_dir}")
     print(f"Packs  : {len(packs)}{f'  (batch {batch_num})' if batch_num else ''}")
     print(f"Mode   : {'DRY RUN' if dry_run else ('SUPER ONLY' if super_only else 'BUILD')}\n")
@@ -793,11 +794,11 @@ def main():
     print(f"\n{'═' * 60}")
     print("BUILDING SUPER BANKS")
     print('═' * 60)
-    build_super_banks(super_data, str(DST_DIR / "super"), dry_run=False)
+    build_super_banks(super_data, str(dst_dir / "super"), dry_run=False)
 
     print(f"\n{'═' * 60}")
     print(f"DONE — {total_ok} kits, {total_skip} skipped")
-    print(f"Output : {DST_DIR}")
+    print(f"Output : {dst_dir}")
 
 
 if __name__ == "__main__":
