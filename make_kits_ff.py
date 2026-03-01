@@ -39,6 +39,9 @@ Usage:
   python make_kits_ff.py Roland Boss       # only zips matching any filter word
   # Super banks only (after all batches done):
   python make_kits_ff.py --super-only
+  # Override source / destination:
+  python make_kits_ff.py --src /path/to/packs --dst /path/to/output
+  # Source can be a folder of .zip files OR a folder of unzipped subdirectories
 """
 
 import os, re, sys, shutil, subprocess, tempfile, time, wave, zipfile
@@ -165,29 +168,51 @@ def make_silent_wav(path, sr=48000, ms=50):
         w.writeframes(b'\x00' * n * 2)
 
 
-def list_audio(zip_path):
-    """List audio file paths inside a zip (sorted)."""
-    exts = {'.wav', '.aif', '.aiff'}
-    with zipfile.ZipFile(zip_path) as zf:
+_AUDIO_EXTS = {'.wav', '.aif', '.aiff'}
+
+
+def list_audio(pack_path):
+    """List relative audio file names inside a zip or directory (sorted)."""
+    pack_path = Path(pack_path)
+    if pack_path.suffix.lower() == '.zip':
+        with zipfile.ZipFile(pack_path) as zf:
+            return sorted(
+                n for n in zf.namelist()
+                if not os.path.basename(n).startswith('.')
+                and Path(n).suffix.lower() in _AUDIO_EXTS
+                and not n.endswith('/')
+            )
+    else:
         return sorted(
-            n for n in zf.namelist()
-            if not os.path.basename(n).startswith('.')
-            and Path(n).suffix.lower() in exts
-            and not n.endswith('/')
+            str(f.relative_to(pack_path))
+            for f in pack_path.rglob('*')
+            if f.is_file()
+            and not f.name.startswith('.')
+            and f.suffix.lower() in _AUDIO_EXTS
         )
 
 
-def extract_zip(zip_path, tmp_dir):
-    """Extract all audio files into tmp_dir. Return sorted list of abs paths."""
-    exts = {'.wav', '.aif', '.aiff'}
+def extract_audio(pack_path, tmp_dir):
+    """Extract/copy all audio files into tmp_dir. Return sorted abs paths."""
+    pack_path = Path(pack_path)
     out = []
-    with zipfile.ZipFile(zip_path) as zf:
-        for member in zf.namelist():
-            if (not os.path.basename(member).startswith('.')
-                    and Path(member).suffix.lower() in exts
-                    and not member.endswith('/')):
-                zf.extract(member, tmp_dir)
-                out.append(os.path.join(tmp_dir, member))
+    if pack_path.suffix.lower() == '.zip':
+        with zipfile.ZipFile(pack_path) as zf:
+            for member in zf.namelist():
+                if (not os.path.basename(member).startswith('.')
+                        and Path(member).suffix.lower() in _AUDIO_EXTS
+                        and not member.endswith('/')):
+                    zf.extract(member, tmp_dir)
+                    out.append(os.path.join(tmp_dir, member))
+    else:
+        for f in sorted(pack_path.rglob('*')):
+            if f.is_file() and not f.name.startswith('.') \
+                    and f.suffix.lower() in _AUDIO_EXTS:
+                rel = f.relative_to(pack_path)
+                dst = Path(tmp_dir) / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(f), str(dst))
+                out.append(str(dst))
     return sorted(out)
 
 
@@ -198,13 +223,20 @@ def sanitize(s, n=20):
 
 # ── Kit builder ────────────────────────────────────────────────────────────────
 
-def build_kit(audio_files, kit_dir, is_small, dry_run):
+def build_kit(audio_files, kit_dir, dry_run):
     """
-    Classify files, pick one per slot, export 16-pad kit.
+    Classify files, pick one per slot, export a full 16-pad kit.
 
-    Small kits (≤16 sounds): use ALL sounds, classify each to a slot.
-    Larger kits            : pick one best-per-type (middle of sorted candidates).
-    Non-drum / synth kits  : spread sounds evenly across all 12 slots.
+    All 16 WAV files are always written — silent placeholder for any slot
+    that has no matching sound, so drag-and-drop always loads 16 pads.
+
+    Filling priority (drum kits):
+      1. One best-per-type to its designated slot (kick→13, snare→14 …)
+      2. Generic "tom" names → lowest empty tom slot
+      3. Any remaining unclassified sounds → remaining empty slots
+      4. Still-empty slots → silent placeholder WAV
+
+    Non-drum / synth kits: sounds spread evenly across all 12 slots.
 
     Returns dict of type → chosen_src_path (for super bank collection).
     """
@@ -218,22 +250,27 @@ def build_kit(audio_files, kit_dir, is_small, dry_run):
     assignments = {}  # slot_type → abs_src_path
 
     if is_drum:
+        # Pass 1: best representative per classified type
         for slot_type in SLOT_NAMES:
             chosen = pick_file(buckets.get(slot_type, []))
             if chosen:
                 assignments[slot_type] = chosen
 
-        # Small kits: fill remaining empty slots with unclassified sounds
-        if is_small and unclassified:
-            for slot_type in SLOT_NAMES:
-                if slot_type not in assignments and unclassified:
-                    assignments[slot_type] = unclassified.pop(0)
-
-        # Tom fallback: generic "tom" in name → lowest empty tom slot
-        tom_files = [f for f in unclassified if "tom" in os.path.basename(f).lower()]
+        # Pass 2: generic "tom" names → lowest empty tom slot
         for ts in ["low_tom", "mid_tom", "hi_tom"]:
-            if ts not in assignments and tom_files:
-                assignments[ts] = tom_files.pop(0)
+            if ts not in assignments:
+                tom_cands = [f for f in unclassified
+                             if "tom" in os.path.basename(f).lower()]
+                if tom_cands:
+                    chosen = tom_cands[0]
+                    assignments[ts] = chosen
+                    unclassified.remove(chosen)
+
+        # Pass 3: fill remaining empty slots with unclassified sounds
+        for slot_type in SLOT_NAMES:
+            if slot_type not in assignments and unclassified:
+                assignments[slot_type] = unclassified.pop(0)
+
     else:
         # Non-drum / synth: spread evenly across all 12 sound slots
         files = sorted(audio_files)
@@ -243,25 +280,30 @@ def build_kit(audio_files, kit_dir, is_small, dry_run):
         for slot_type, f in zip(SLOT_NAMES, files):
             assignments[slot_type] = f
 
+    filled   = len(assignments)
+    empty    = len(SLOT_NAMES) - filled
+    tag      = "(drum)" if is_drum else "(synth-spread)"
+
     if dry_run:
-        tag = "(drum)" if is_drum else "(synth-spread)"
-        print(f"    {len(assignments):2d}/12 slots filled  {tag}")
+        print(f"    {filled:2d}/12 filled  {empty} silent  {tag}")
         return assignments
 
     os.makedirs(kit_dir, exist_ok=True)
 
-    # Silent top-row pads (01-04)
+    # Silent top-row pads (01-04) — always
     for i in range(1, 5):
         shutil.copy(SILENT_WAV, os.path.join(kit_dir, f"0{i}_empty.wav"))
 
-    # Sound pads (05-16)
+    # Sound pads (05-16) — sound or silent placeholder
     for file_num, slot_type in SOUND_SLOTS:
-        src = assignments.get(slot_type)
-        if not src:
-            continue
         dst = os.path.join(kit_dir, f"{file_num:02d}_{slot_type}.wav")
-        ok = export(src, dst)
-        print(f"    {file_num:02d}_{slot_type:<12} {'OK' if ok else 'FAIL'}  {os.path.basename(src)}")
+        src = assignments.get(slot_type)
+        if src:
+            ok = export(src, dst)
+            print(f"    {file_num:02d}_{slot_type:<12} {'OK  ' if ok else 'FAIL'}  {os.path.basename(src)}")
+        else:
+            shutil.copy(SILENT_WAV, dst)
+            print(f"    {file_num:02d}_{slot_type:<12} EMPTY (silent placeholder)")
 
     return assignments
 
@@ -494,16 +536,24 @@ class UI:
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def dry_run_kit(audio_names, machine):
-    """Fast dry-run analysis using only zip member names (no extraction needed)."""
+    """Fast dry-run analysis using only file names (no extraction needed)."""
     buckets = defaultdict(list)
     unclassified = []
     for name in audio_names:
         t = classify(name)
         (buckets[t] if t else unclassified).append(name)
     is_drum = bool(buckets)
-    filled  = len(buckets) if is_drum else min(len(audio_names), len(SLOT_NAMES))
-    tag     = "(drum)" if is_drum else "(synth-spread)"
-    print(f"    {filled:2d}/12 slots filled  {tag}")
+    if is_drum:
+        filled = len(set(SLOT_NAMES) & set(buckets.keys()))
+        # account for unclassified filling empty slots
+        empty_slots = len(SLOT_NAMES) - filled
+        from_unclassified = min(len(unclassified), empty_slots)
+        filled += from_unclassified
+    else:
+        filled = min(len(audio_names), len(SLOT_NAMES))
+    empty = len(SLOT_NAMES) - filled
+    tag   = "(drum)" if is_drum else "(synth-spread)"
+    print(f"    {filled:2d}/12 filled  {empty} silent  {tag}")
     return is_drum
 
 
@@ -573,23 +623,44 @@ def main():
         if not a.startswith("--"):
             filters.append(a)
 
-    zips = sorted(SRC_DIR.glob("*.zip"))
+    # ── Resolve src / dst (CLI overrides defaults) ────────────────────────────
+    src_dir = SRC_DIR
+    dst_dir = DST_DIR
+    for i, a in enumerate(args):
+        if a == "--src" and i + 1 < len(args):
+            src_dir = Path(args[i + 1])
+        if a == "--dst" and i + 1 < len(args):
+            dst_dir = Path(args[i + 1])
+
+    # ── Discover packs: .zip files OR unzipped subdirectories ─────────────────
+    packs = []
+    for p in sorted(src_dir.iterdir()):
+        if p.name.startswith('.'):
+            continue
+        if p.suffix.lower() == '.zip':
+            packs.append(p)
+        elif p.is_dir():
+            if any(f.suffix.lower() in _AUDIO_EXTS
+                   for f in p.rglob('*') if f.is_file() and not f.name.startswith('.')):
+                packs.append(p)
+
     if batch_num is not None:
         letters = BATCHES.get(batch_num, set())
-        zips = [z for z in zips if z.stem[0].lower() in letters]
+        packs = [p for p in packs if p.stem[0].lower() in letters]
     elif filters:
-        zips = [z for z in zips if any(f.lower() in z.name.lower() for f in filters)]
+        packs = [p for p in packs if any(f.lower() in p.name.lower() for f in filters)]
 
-    print(f"Source : {SRC_DIR}")
-    print(f"Output : {DST_DIR}")
-    print(f"Zips   : {len(zips)}{f'  (batch {batch_num})' if batch_num else ''}")
+    src_type = "zip" if packs and packs[0].suffix.lower() == '.zip' else "folder"
+    print(f"Source : {src_dir}  ({src_type}s)")
+    print(f"Output : {dst_dir}")
+    print(f"Packs  : {len(packs)}{f'  (batch {batch_num})' if batch_num else ''}")
     print(f"Mode   : {'DRY RUN' if dry_run else ('SUPER ONLY' if super_only else 'BUILD')}\n")
 
-    ui = None if dry_run else UI(len(zips))
+    ui = None if dry_run else UI(len(packs))
 
     if not dry_run:
         for sub in ("drumkit", "blocks", "super"):
-            (DST_DIR / sub).mkdir(parents=True, exist_ok=True)
+            (dst_dir / sub).mkdir(parents=True, exist_ok=True)
         make_silent_wav(SILENT_WAV)
 
     super_data  = defaultdict(list)  # type → [(machine_name, abs_path)]
@@ -600,28 +671,28 @@ def main():
 
     # --super-only: collect from already-built kits then jump to super banks
     if super_only:
-        all_zips = sorted(SRC_DIR.glob("*.zip"))
-        for z in all_zips:
-            kit_dir = str(DST_DIR / "drumkit" / z.stem)
+        for kit_path in sorted((dst_dir / "drumkit").iterdir()):
+            if not kit_path.is_dir():
+                continue
             for stype, fname in SUPER_FILES.items():
-                fpath = os.path.join(kit_dir, fname)
-                if os.path.exists(fpath):
-                    super_data[stype].append((z.stem, fpath))
+                fpath = kit_path / fname
+                if fpath.exists():
+                    super_data[stype].append((kit_path.name, str(fpath)))
         print(f"Collected super data from existing kits:")
         for stype, entries in super_data.items():
             print(f"  {stype}: {len(entries)} machines")
         print()
-        build_super_banks(super_data, str(DST_DIR / "super"), dry_run=False)
+        build_super_banks(super_data, str(dst_dir / "super"), dry_run=False)
         print("\nDone — super banks built.")
         return
 
-    for zip_path in zips:
-        machine = zip_path.stem
+    for pack in packs:
+        machine = pack.stem
 
         if ui: ui.clear()
 
         try:
-            audio_names = list_audio(zip_path)
+            audio_names = list_audio(pack)
         except Exception as e:
             print(f"[SKIP] {machine}: {e}")
             total_skip += 1
@@ -670,7 +741,7 @@ def main():
             continue
 
         # ── Real build ────────────────────────────────────────────────────────
-        kit_dir = str(DST_DIR / "drumkit" / machine)
+        kit_dir = str(dst_dir / "drumkit" / machine)
 
         # Skip already-built kits (resume support)
         if os.path.isdir(kit_dir) and any(
@@ -688,18 +759,18 @@ def main():
 
         with tempfile.TemporaryDirectory() as tmp:
             try:
-                audio_files = extract_zip(zip_path, tmp)
+                audio_files = extract_audio(pack, tmp)
             except Exception as e:
                 print(f"  [FAIL] extract: {e}")
                 total_skip += 1
                 if ui: ui.update(machine)
                 continue
 
-            build_kit(audio_files, kit_dir, is_small=(n <= 16), dry_run=False)
+            build_kit(audio_files, kit_dir, dry_run=False)
 
             if tier == 4:
                 build_blocks(audio_files, machine,
-                             str(DST_DIR / "blocks"), dry_run=False)
+                             str(dst_dir / "blocks"), dry_run=False)
 
         # Collect already-exported files for super banks (temp dir is gone)
         for stype, fname in SUPER_FILES.items():
