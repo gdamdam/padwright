@@ -223,7 +223,7 @@ def sanitize(s, n=20):
 
 # ── Kit builder ────────────────────────────────────────────────────────────────
 
-def build_kit(audio_files, kit_dir, dry_run):
+def build_kit(audio_files, kit_dir, dry_run, ui=None):
     """
     Classify files, pick one per slot, export a full 16-pad kit.
 
@@ -304,6 +304,7 @@ def build_kit(audio_files, kit_dir, dry_run):
         else:
             shutil.copy(SILENT_WAV, dst)
             print(f"    {file_num:02d}_{slot_type:<12} EMPTY (silent placeholder)")
+        if ui: ui.update(slot_type)
 
     return assignments
 
@@ -519,6 +520,15 @@ class UI:
             self._real.write(f"\r{self._bar_str()}\n")
             self._real.flush()
 
+    def advance(self, n, name=""):
+        self.done  = min(self.done + n, self.total)
+        self._name  = name
+        if self._tty:
+            self._redraw()
+        else:
+            self._real.write(f"\r{self._bar_str()}\n")
+            self._real.flush()
+
     def finish(self):
         self.done  = self.total
         self._name = ""
@@ -716,7 +726,7 @@ def main():
     print(f"Packs  : {len(packs)}{f'  (batch {batch_num})' if batch_num else ''}")
     print(f"Mode   : {'DRY RUN' if dry_run else ('SUPER ONLY' if super_only else 'BUILD')}\n")
 
-    ui = None if dry_run else UI(len(packs))
+    ui = None if dry_run else UI(len(packs) * len(SOUND_SLOTS))
 
     if not dry_run:
         for sub in ("drumkit", "blocks", "super"):
@@ -756,14 +766,14 @@ def main():
         except Exception as e:
             print(f"[SKIP] {machine}: {e}")
             total_skip += 1
-            if ui: ui.update(machine)
+            if ui: ui.advance(len(SOUND_SLOTS), machine)
             continue
 
         n = len(audio_names)
         if n == 0:
             print(f"[SKIP] {machine}: no audio files")
             total_skip += 1
-            if ui: ui.update(machine)
+            if ui: ui.advance(len(SOUND_SLOTS), machine)
             continue
 
         tier = 1 if n <= 16 else (2 if n < TIER_BLOCK else 4)
@@ -814,7 +824,7 @@ def main():
                 if os.path.exists(fpath):
                     super_data[stype].append((machine, fpath))
             total_ok += 1
-            if ui: ui.update(machine)
+            if ui: ui.advance(len(SOUND_SLOTS), machine)
             continue
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -823,10 +833,10 @@ def main():
             except Exception as e:
                 print(f"  [FAIL] extract: {e}")
                 total_skip += 1
-                if ui: ui.update(machine)
+                if ui: ui.advance(len(SOUND_SLOTS), machine)
                 continue
 
-            build_kit(audio_files, kit_dir, dry_run=False)
+            build_kit(audio_files, kit_dir, dry_run=False, ui=ui)
 
             if tier == 4:
                 build_blocks(audio_files, machine,
@@ -839,7 +849,6 @@ def main():
                 super_data[stype].append((machine, fpath))
 
         total_ok += 1
-        if ui: ui.update(machine)
 
     if dry_run:
         print(f"\n{'═' * 60}")

@@ -170,7 +170,7 @@ def evenly_sample(items: list, n: int) -> list:
 
 # ── Bank builder ───────────────────────────────────────────────────────────────
 
-def build_bank(loops: list[Path], bank_dir: str, dry_run: bool) -> int:
+def build_bank(loops: list[Path], bank_dir: str, dry_run: bool, ui=None) -> int:
     """Export up to MAX_PADS loops into bank_dir. Returns count exported."""
     files = evenly_sample(loops, MAX_PADS)
 
@@ -188,6 +188,7 @@ def build_bank(loops: list[Path], bank_dir: str, dry_run: bool) -> int:
         print(f"    {i:02d}_{label:<20} {status}  {src.name}")
         if ok:
             ok_count += 1
+        if ui: ui.update(src.name)
     return ok_count
 
 
@@ -312,6 +313,15 @@ class UI:
             self._real.write(f"\r{self._bar_str()}\n")
             self._real.flush()
 
+    def advance(self, n: int, name: str = ""):
+        self.done  = min(self.done + n, self.total)
+        self._name  = name
+        if self._tty:
+            self._redraw()
+        else:
+            self._real.write(f"\r{self._bar_str()}\n")
+            self._real.flush()
+
     def finish(self):
         self.done  = self.total
         self._name = ""
@@ -385,7 +395,8 @@ def main():
     if not dry_run:
         dst_dir.mkdir(parents=True, exist_ok=True)
 
-    ui = None if dry_run else UI(len(banks))
+    total_files = sum(min(len(loops), MAX_PADS) for _, loops in banks)
+    ui = None if dry_run else UI(total_files)
 
     total_ok   = 0
     total_skip = 0
@@ -414,15 +425,12 @@ def main():
         ):
             print(f"  [SKIP] already built")
             total_ok += 1
-            if ui:
-                ui.update(bank_name)
+            if ui: ui.advance(capped, bank_name)
             continue
 
-        exported = build_bank(loops, bank_dir, dry_run=False)
+        exported = build_bank(loops, bank_dir, dry_run=False, ui=ui)
         total_loops += exported
         total_ok += 1
-        if ui:
-            ui.update(bank_name)
 
     if dry_run:
         print(f"\n{'═' * 60}")
