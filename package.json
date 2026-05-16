@@ -1,0 +1,20 @@
+{
+  "name": "sp404-toolkit",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SP-404 MK2 Toolkit — Tauri desktop wrapper",
+  "scripts": {
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "tauri:build:macos:arm64": "tauri build --target aarch64-apple-darwin",
+    "tauri:build:macos:x64": "tauri build --target x86_64-apple-darwin",
+    "tauri:build:windows": "tauri build --target x86_64-pc-windows-msvc",
+    "py:bundle": "pyinstaller --clean pyinstaller_app.spec",
+    "py:install-sidecar": "node scripts/install_sidecar.mjs",
+    "ffmpeg:install": "node scripts/install_ffmpeg.mjs"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  }
+}

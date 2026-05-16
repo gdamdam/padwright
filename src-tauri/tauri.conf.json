@@ -1,0 +1,67 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "SP-404 Toolkit",
+  "version": "0.1.0",
+  "identifier": "com.sp404mk2.toolkit",
+  "build": {
+    "frontendDist": "loading"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "SP-404 MK2 Toolkit",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 900,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "url": "index.html"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' http://127.0.0.1:* http://localhost:*; media-src 'self' http://127.0.0.1:* http://localhost:* blob:; img-src 'self' data: http://127.0.0.1:* http://localhost:*; script-src 'self' http://127.0.0.1:* http://localhost:* 'unsafe-inline'; style-src 'self' http://127.0.0.1:* http://localhost:* 'unsafe-inline'; connect-src http://127.0.0.1:* http://localhost:*"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["dmg", "app", "msi", "deb", "appimage"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "externalBin": [
+      "binaries/sp404-server",
+      "binaries/ffmpeg",
+      "binaries/ffprobe"
+    ],
+    "category": "Music",
+    "shortDescription": "Last-mile SP-404 MK2 sample-kit prep",
+    "longDescription": "Build, audit, and curate SP-404 MK2 banks from your sample library. Wraps the Python toolkit in a desktop window."
+  },
+  "plugins": {
+    "shell": {
+      "scope": [
+        {
+          "name": "sp404-server",
+          "sidecar": true,
+          "args": true
+        },
+        {
+          "name": "ffmpeg",
+          "sidecar": true,
+          "args": true
+        },
+        {
+          "name": "ffprobe",
+          "sidecar": true,
+          "args": true
+        }
+      ]
+    }
+  }
+}

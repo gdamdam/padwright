@@ -188,6 +188,14 @@ Source files referenced by a crate that no longer exist degrade to
 silent placeholders with a warning, so a moved source doesn't abort the
 build. See **Crates** below for the format.
 
+### Desktop app (Tauri)
+
+The same web UI can be packaged as a double-clickable desktop app
+(`.dmg` on macOS, `.msi` on Windows, `.AppImage`/`.deb` on Linux)
+that bundles the Python runtime and ffmpeg inside. End users don't
+need Python, pip, or a terminal. See `BUILD.md` for the full build
+recipe. Scaffold lives in `src-tauri/`.
+
 ### `web/app.py` — local browser UI (FastAPI)
 
 A small web UI on `http://localhost:<port>` that wraps the CLI tools for
