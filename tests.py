@@ -439,6 +439,85 @@ def test_crate_missing_source_falls_back_silent():
               "missing-source pad becomes silent rather than failing")
 
 
+def has_web_deps() -> bool:
+    """Whether all deps needed by web/app.py are importable."""
+    try:
+        import fastapi  # noqa: F401
+        from fastapi.testclient import TestClient  # noqa: F401
+        # Also tries python-multipart implicitly via Form() route decorators.
+        from web import app as webapp  # noqa: F401
+        return True
+    except (ImportError, RuntimeError):
+        return False
+
+
+def test_web_app_routes():
+    print("web app routes")
+    if not has_ffmpeg():
+        print("  skip (ffmpeg/ffprobe not on PATH)")
+        return
+    if not has_web_deps():
+        print("  skip (web deps missing — pip install -r requirements.txt)")
+        return
+
+    import make_kits
+    from fastapi.testclient import TestClient
+    from web import app as webapp
+
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        src = d / "src" / "TestKit"; src.mkdir(parents=True)
+        for name in ("BD01.wav", "SD01.wav"):
+            _write_tiny_wav(src / name)
+        boutique = src / "Boutique.wav"
+        _write_tiny_wav(boutique, ms=80)
+
+        make_kits.SILENT_WAV = str(d / "silent.wav")
+        core.make_silent_wav(make_kits.SILENT_WAV)
+        make_kits.build_kit(
+            [str(src / "BD01.wav"), str(src / "SD01.wav")],
+            str(d / "out" / "TestKit"), dry_run=False,
+        )
+
+        webapp.STATE.root = (d / "out").resolve()
+        webapp.STATE.samples = src.resolve()
+        webapp.STATE.crates_dir = (d / "crates").resolve()
+        webapp.STATE.crates_dir.mkdir(exist_ok=True)
+        c = TestClient(webapp.app)
+
+        for url in ["/health", "/", "/kit/TestKit", "/audit", "/crate",
+                    "/samples", "/api/samples",
+                    "/audio/kit/TestKit/13_kick.wav"]:
+            r = c.get(url, follow_redirects=False)
+            check(r.status_code == 200,
+                  f"GET {url} -> 200 (got {r.status_code})")
+
+        # Swap pad 13 via POST
+        r = c.post("/kit/TestKit/swap",
+                   data={"pad": "13", "source": str(boutique), "pad_type": "kick"},
+                   follow_redirects=False)
+        check(r.status_code == 303, f"POST swap -> 303 (got {r.status_code})")
+        m = json.loads((d / "out" / "TestKit" / "manifest.json").read_text())
+        kick = next(p for p in m["pads"] if p["pad"] == 13)
+        check(kick["kind"] == "swap", "pad 13 kind=swap after web swap")
+        check(kick["source_basename"] == "Boutique.wav",
+              "pad 13 source updated by web swap")
+
+        # Build a kit from the crate editor POST
+        crate_pads = [{"pad": 13, "source": str(boutique), "type": "kick"}]
+        r = c.post("/crate/build",
+                   data={"name": "WebKit", "kind": "drumkit",
+                         "pad_json": json.dumps(crate_pads)},
+                   follow_redirects=False)
+        check(r.status_code == 303, f"POST crate build -> 303 (got {r.status_code})")
+        built = d / "out" / "WebKit"
+        check((built / "manifest.json").exists(), "crate build wrote manifest")
+        check((built / "crate.json").exists(), "crate build also saved crate.json")
+        m = json.loads((built / "manifest.json").read_text())
+        check(m["meta"].get("source") == "web_ui",
+              "manifest records web_ui as source")
+
+
 def main():
     failures = 0
     for fn in [test_classify, test_pad_layout,
@@ -447,7 +526,8 @@ def main():
                test_swap_pad_e2e, test_rebuild_kit_e2e,
                test_crate_roundtrip_e2e,
                test_crate_missing_source_falls_back_silent,
-               test_audit_kits_e2e]:
+               test_audit_kits_e2e,
+               test_web_app_routes]:
         try:
             fn()
         except AssertionError as e:

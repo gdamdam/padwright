@@ -162,9 +162,19 @@ def pick_file(candidates: list[str]) -> str | None:
 
 # ── Audio I/O ─────────────────────────────────────────────────────────────────
 
+def _ffmpeg_bin() -> str:
+    """Path to ffmpeg. Honors $FFMPEG_PATH so bundled apps can ship their own."""
+    return os.environ.get("FFMPEG_PATH") or "ffmpeg"
+
+
+def _ffprobe_bin() -> str:
+    """Path to ffprobe. Honors $FFPROBE_PATH so bundled apps can ship their own."""
+    return os.environ.get("FFPROBE_PATH") or "ffprobe"
+
+
 def export(src: str, dst: str, channels: int = 1, sr: int = SR) -> bool:
     """Convert src → 16-bit / sr / mono|stereo WAV via ffmpeg."""
-    cmd = ["ffmpeg", "-y", "-i", str(src),
+    cmd = [_ffmpeg_bin(), "-y", "-i", str(src),
            "-ac", str(channels), "-ar", str(sr), "-sample_fmt", "s16", str(dst)]
     r = subprocess.run(cmd, capture_output=True)
     return r.returncode == 0
@@ -263,7 +273,7 @@ def evenly_sample(items: list, n: int) -> list:
 
 def ffprobe_info(path: str | Path) -> dict:
     """Return {duration, sample_rate, channels} via ffprobe (best effort)."""
-    cmd = ["ffprobe", "-v", "error", "-select_streams", "a:0",
+    cmd = [_ffprobe_bin(), "-v", "error", "-select_streams", "a:0",
            "-show_entries", "stream=sample_rate,channels:format=duration",
            "-of", "json", str(path)]
     try:

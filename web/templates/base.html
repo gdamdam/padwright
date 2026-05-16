@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{% block title %}SP-404 MK2 Toolkit{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a href="/" class="brand">SP-404 MK2 Toolkit</a>
+    <nav>
+      <a href="/">Library</a>
+      <a href="/audit">Audit</a>
+      <a href="/crate">New crate</a>
+      {% if samples %}<a href="/samples">Samples</a>{% endif %}
+    </nav>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

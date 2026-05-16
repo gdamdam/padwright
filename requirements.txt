@@ -1,0 +1,7 @@
+# Runtime deps for the web/GUI app (web/app.py).
+# CLI tools (make_kits, make_breakbeats, swap_pad, …) need only the stdlib
+# plus ffmpeg/ffprobe on PATH.
+fastapi>=0.110
+uvicorn[standard]>=0.27
+jinja2>=3.1
+python-multipart>=0.0.9

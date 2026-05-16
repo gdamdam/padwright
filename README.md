@@ -188,6 +188,26 @@ Source files referenced by a crate that no longer exist degrade to
 silent placeholders with a warning, so a moved source doesn't abort the
 build. See **Crates** below for the format.
 
+### `web/app.py` — local browser UI (FastAPI)
+
+A small web UI on `http://localhost:<port>` that wraps the CLI tools for
+non-terminal users. Browse the library, inspect kits with in-browser
+audio audition, swap pads via form, edit and build crates with
+drag-and-drop from a sample browser, view the duplicate audit.
+
+```bash
+pip install -r requirements.txt
+python3 -m web.app --root /path/to/built_kits --samples /path/to/samples
+python3 -m web.app --root ./out --port 0 --no-browser   # auto-pick port
+```
+
+Routes: `/` (library), `/kit/<rel>` (kit detail), `/audit`,
+`/crate`, `/samples`. POST endpoints for `/kit/<rel>/swap` and
+`/crate/build`. Audio is served from `/audio/kit/...` and
+`/audio/sample?path=...`. Honors `FFMPEG_PATH` / `FFPROBE_PATH` env
+vars so the bundled-app build (see `BUILD.md`) can ship its own
+ffmpeg binary.
+
 ### `audit_kits.py` — find duplicate pads across a built tree
 
 Walks a destination directory, reads every `manifest.json`, groups pad

@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Audit{% endblock %}
+{% block content %}
+<h1>Duplicate audit</h1>
+
+<form method="get" action="/audit" class="filters">
+  <label>
+    <input type="checkbox" name="exclude_super" value="true" {% if exclude_super %}checked{% endif %}>
+    Exclude super banks (they're copies of drumkit pads by design)
+  </label>
+  <label>
+    <input type="checkbox" name="by_source" value="true" {% if by_source %}checked{% endif %}>
+    Group by source path (instead of sha256)
+  </label>
+  <button type="submit">Apply</button>
+</form>
+
+<p class="hint">
+  Scanned {{ total_pads }} pads in {{ unique }} unique {{ key }}s.
+  {{ dups | length }} duplicate group(s) found.
+</p>
+
+{% if not dups %}
+<p>No duplicates.</p>
+{% else %}
+  {% for key_val, entries in dups %}
+  <section class="dup-group">
+    <h3>{{ key }} {{ key_val[:12] }}… <span class="muted">({{ entries|length }} pads)</span></h3>
+    {% set unique_sources = entries | map(attribute='source') | reject('none') | unique | list %}
+    {% if unique_sources | length == 1 %}
+    <p class="hint">source: <code>{{ unique_sources[0] }}</code></p>
+    {% endif %}
+    <ul>
+      {% for e in entries %}
+      <li>
+        <span class="tag tag-{{ e.kind or 'empty' }}">{{ e.kind or '?' }}</span>
+        <a href="/kit/{{ e.kit_dir.replace((root + '/'), '') if root else e.kit_dir }}">{{ e.kit }}</a>
+        pad {{ "%02d" % e.pad }} — <code>{{ e.filename }}</code>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endfor %}
+{% endif %}
+{% endblock %}

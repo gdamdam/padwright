@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Samples — {{ listing.cwd or '/' }}{% endblock %}
+{% block content %}
+<h1>Samples</h1>
+<p class="hint">Root: <code>{{ samples_root }}</code></p>
+
+<nav class="breadcrumb">
+  <a href="/samples">/</a>
+  {% set parts = listing.cwd.split('/') if listing.cwd else [] %}
+  {% set acc = [] %}
+  {% for p in parts if p %}
+    {% set _ = acc.append(p) %}
+    / <a href="/samples?path={{ '/'.join(acc) }}">{{ p }}</a>
+  {% endfor %}
+</nav>
+
+{% if listing.parent is not none %}
+<p><a href="/samples?path={{ listing.parent }}">⬑ up</a></p>
+{% endif %}
+
+<ul class="files">
+  {% for f in listing.folders %}
+  <li class="folder">📁 <a href="/samples?path={{ (listing.cwd + '/' + f) if listing.cwd else f }}">{{ f }}</a></li>
+  {% endfor %}
+  {% for f in listing.files %}
+  <li class="file">
+    <span class="fn">{{ f.name }}</span>
+    <span class="sz">{{ '%.1f' % (f.size / 1024) }} KB</span>
+    <audio controls preload="none" src="/audio/sample?path={{ f.abs }}"></audio>
+    <code class="abs">{{ f.abs }}</code>
+  </li>
+  {% endfor %}
+</ul>
+{% endblock %}

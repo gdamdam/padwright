@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}{{ manifest.kit_name }} — Kit{% endblock %}
+{% block content %}
+<h1>{{ manifest.kit_name }}</h1>
+<p class="hint">
+  Kind: <span class="tag tag-{{ manifest.meta.kind }}">{{ manifest.meta.kind }}</span>
+  · Pads: {{ manifest.pads | length }}
+  · <a href="/crate?kit_rel={{ kit_rel }}">edit as crate</a>
+</p>
+
+<table class="padgrid">
+  {% for row in range(4) %}
+  <tr>
+    {% for col in range(4) %}
+      {% set pad_num = row * 4 + col + 1 %}
+      {% set p = manifest.pads | selectattr("pad", "equalto", pad_num) | first %}
+      {% if p %}
+      <td class="pad pad-{{ p.type or 'empty' }}">
+        <details>
+          <summary>
+            <div class="pn">{{ "%02d" % p.pad }}</div>
+            <div class="ty">{{ p.type or 'empty' }}</div>
+            <div class="fn">{{ p.filename }}</div>
+            {% if p.source_basename %}
+            <div class="sr" title="{{ p.source }}">{{ p.source_basename }}</div>
+            {% endif %}
+            {% if p.duration_s %}
+            <div class="du">{{ "%.2fs" % p.duration_s }} · {{ p.channels or '?' }}ch</div>
+            {% endif %}
+            <audio controls preload="none" src="/audio/kit/{{ kit_rel }}/{{ p.filename }}"></audio>
+          </summary>
+          {% if samples %}
+          <form class="swap" method="post" action="/kit/{{ kit_rel }}/swap">
+            <input type="hidden" name="pad" value="{{ p.pad }}">
+            <label>
+              Swap with absolute file path:
+              <input type="text" name="source" placeholder="/path/to/file.wav"
+                     list="samples-list-{{ p.pad }}" required>
+            </label>
+            <label>
+              Type (optional):
+              <input type="text" name="pad_type" value="{{ p.type or '' }}">
+            </label>
+            <button type="submit">Swap pad</button>
+          </form>
+          {% else %}
+          <p class="hint">Start the app with <code>--samples PATH</code> to enable swap.</p>
+          {% endif %}
+        </details>
+      </td>
+      {% endif %}
+    {% endfor %}
+  </tr>
+  {% endfor %}
+</table>
+
+<p class="hint">Click a pad to expand swap controls. Paste any absolute path
+to a WAV/AIF file under the samples root.</p>
+{% endblock %}

@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Library — {{ root }}{% endblock %}
+{% block content %}
+<h1>Library</h1>
+<p class="hint">
+  Root: <code>{{ root }}</code>
+  {% if samples %}· Samples: <code>{{ samples }}</code>{% endif %}
+</p>
+
+{% if not kits %}
+<div class="empty">
+  <p>No kits found under <code>{{ root }}</code>.</p>
+  <p>Build some with <code>python3 make_kits.py --unzipped --src … --dst {{ root }}</code>,
+     or <a href="/crate">start a new crate</a>.</p>
+</div>
+{% else %}
+<table class="kits">
+  <thead>
+    <tr><th>Kit</th><th>Kind</th><th>Pads</th><th>Path</th><th></th></tr>
+  </thead>
+  <tbody>
+  {% for k in kits %}
+    <tr>
+      <td><a href="/kit/{{ k.rel }}">{{ k.name }}</a></td>
+      <td><span class="tag tag-{{ k.kind }}">{{ k.kind }}</span></td>
+      <td>{{ k.sourced }}/{{ k.pads }} sourced</td>
+      <td><code>{{ k.rel }}</code></td>
+      <td><a href="/crate?kit_rel={{ k.rel }}" class="btn">edit as crate</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

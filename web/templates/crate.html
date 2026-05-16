@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Crate editor — {{ crate.name }}{% endblock %}
+{% block content %}
+<h1>Crate editor</h1>
+
+<form id="crateForm" method="post" action="/crate/build">
+  <div class="cratemeta">
+    <label>Name <input type="text" name="name" value="{{ crate.name }}" required></label>
+    <label>Kind
+      <select name="kind">
+        <option value="drumkit" {% if crate.kind == 'drumkit' %}selected{% endif %}>drumkit</option>
+        <option value="loop_bank" {% if crate.kind == 'loop_bank' %}selected{% endif %}>loop_bank</option>
+        <option value="block" {% if crate.kind == 'block' %}selected{% endif %}>block</option>
+        <option value="super" {% if crate.kind == 'super' %}selected{% endif %}>super</option>
+      </select>
+    </label>
+  </div>
+
+  <table class="padgrid">
+    {% for row in range(4) %}
+    <tr>
+      {% for col in range(4) %}
+        {% set pad_num = row * 4 + col + 1 %}
+        {% set existing = (crate.pads | selectattr("pad", "equalto", pad_num) | first) %}
+        {% set default_type = '' %}
+        {% for sn, st in sound_slots %}
+          {% if sn == pad_num %}{% set default_type = st %}{% endif %}
+        {% endfor %}
+        <td class="pad pad-{{ (existing and existing.type) or default_type or 'empty' }}">
+          <div class="pn">{{ "%02d" % pad_num }}</div>
+          <input type="text" class="src-input" data-pad="{{ pad_num }}"
+                 placeholder="drag from /samples or paste path"
+                 value="{{ existing.source if existing else '' }}">
+          <input type="text" class="type-input" data-pad="{{ pad_num }}"
+                 placeholder="type (kick, snare, …)"
+                 value="{{ (existing and existing.type) or default_type }}">
+          <button type="button" class="clearbtn" data-pad="{{ pad_num }}">clear</button>
+        </td>
+      {% endfor %}
+    </tr>
+    {% endfor %}
+  </table>
+
+  <input type="hidden" id="pad_json" name="pad_json" value="[]">
+  <button type="submit" id="buildBtn">Build kit</button>
+</form>
+
+{% if samples %}
+<section id="samples-pane">
+  <h2>Samples <small>(drag onto a pad)</small></h2>
+  <p class="hint">Root: <code>{{ samples }}</code></p>
+  <div id="samples-browser" data-cwd=""></div>
+</section>
+{% else %}
+<p class="hint">Restart with <code>--samples PATH</code> to enable the sample browser.</p>
+{% endif %}
+
+<script src="/static/crate.js"></script>
+{% endblock %}

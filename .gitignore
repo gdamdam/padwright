@@ -1,3 +1,10 @@
 __pycache__/
 *.py[cod]
 
+# Web/Tauri build artifacts
+node_modules/
+src-tauri/target/
+src-tauri/gen/
+dist/
+build/
+*.spec.bak
