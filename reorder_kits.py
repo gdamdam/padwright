@@ -13,13 +13,15 @@ Result layout on device (file number = pad number):
   [13_kick ][14_snare][15_cl_hh][16_op_hh]  ← bottom    (pads 13-16) ← kick ✓
 """
 
+import argparse
 import os
-import struct
 import shutil
-import wave
+import tempfile
 
-KITS_DIR = "/Volumes/eight/MUSIC_PRODUCTION/SAMPLES_SP404MK2"
-SILENT_WAV = "/tmp/sp404_empty.wav"
+from sp404_core import make_silent_wav
+
+DEFAULT_KITS_DIR = "/Volumes/eight/MUSIC_PRODUCTION/SAMPLES_SP404MK2"
+SILENT_WAV = os.path.join(tempfile.gettempdir(), "sp404_empty.wav")
 
 # Old prefix → New prefix  (for files named NN_name.wav)
 REMAP = {
@@ -38,46 +40,62 @@ REMAP = {
 }
 
 
-def make_silent_wav(path, duration_sec=0.05, sr=48000):
-    """Write a minimal silent 16-bit mono WAV."""
-    n_samples = int(sr * duration_sec)
-    with wave.open(path, 'w') as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(sr)
-        w.writeframes(b'\x00' * n_samples * 2)
+def reorder_kit(kit_dir, dst_dir=None, dry_run=False):
+    """
+    Reorder a kit in-place, or write the reordered copy under dst_dir.
 
-
-def reorder_kit(kit_dir):
+    When dst_dir is None: rename in place.
+    When dst_dir is given: copy each source file to dst_dir/<basename(kit_dir)>/
+    under its new name (original kit is left untouched).
+    """
     files = [f for f in os.listdir(kit_dir)
              if f.endswith('.wav') and not f.startswith('.')]
 
-    # ── Step 1: rename to temp names to avoid collisions ──────────────────────
-    temp_map = {}   # tempname → final name
+    rename_plan = []   # list of (old_name, new_name)
     for fname in files:
         prefix = fname[:2]
         if prefix in REMAP:
             new_prefix = REMAP[prefix]
             new_name = new_prefix + fname[2:]   # keep _name.wav suffix
-            tmp_name = "TMP_" + fname
-            os.rename(os.path.join(kit_dir, fname),
+            rename_plan.append((fname, new_name))
+
+    target_dir = (os.path.join(dst_dir, os.path.basename(kit_dir))
+                  if dst_dir else kit_dir)
+
+    if dry_run:
+        print(f"  {os.path.basename(kit_dir)}: would rename "
+              f"{len(rename_plan)}, add 4 silent → {target_dir}")
+        for old, new in rename_plan:
+            print(f"    {old} → {new}")
+        return len(rename_plan)
+
+    if dst_dir:
+        os.makedirs(target_dir, exist_ok=True)
+        # Copy renamed files
+        for old, new in rename_plan:
+            shutil.copy2(os.path.join(kit_dir, old),
+                         os.path.join(target_dir, new))
+    else:
+        # In-place rename via temp names to avoid collisions
+        temp_map = {}
+        for old, new in rename_plan:
+            tmp_name = "TMP_" + old
+            os.rename(os.path.join(kit_dir, old),
                       os.path.join(kit_dir, tmp_name))
-            temp_map[tmp_name] = new_name
+            temp_map[tmp_name] = new
+        for tmp_name, final_name in temp_map.items():
+            os.rename(os.path.join(kit_dir, tmp_name),
+                      os.path.join(kit_dir, final_name))
 
-    # ── Step 2: rename temp names to final names ───────────────────────────────
-    for tmp_name, final_name in temp_map.items():
-        os.rename(os.path.join(kit_dir, tmp_name),
-                  os.path.join(kit_dir, final_name))
-
-    # ── Step 3: add 4 silent placeholder files (top row) ──────────────────────
+    # Add silent top-row placeholders
     for i in range(1, 5):
-        dst = os.path.join(kit_dir, f"0{i}_empty.wav")
+        dst = os.path.join(target_dir, f"0{i}_empty.wav")
         if not os.path.exists(dst):
             shutil.copy(SILENT_WAV, dst)
 
-    renamed = len(temp_map)
-    print(f"  {os.path.basename(kit_dir)}: {renamed} files renamed, 4 silent pads added")
-    return renamed
+    print(f"  {os.path.basename(kit_dir)}: {len(rename_plan)} files "
+          f"renamed, 4 silent pads added")
+    return len(rename_plan)
 
 
 def find_kit_dirs(base):
@@ -124,31 +142,48 @@ After renaming, 4 silent placeholders are added:
   04_empty.wav → pad 4  (top-right, silent)
 
 Usage:
-  python reorder_kits.py        process all unordered kits under the default dir
-  python reorder_kits.py --help show this message
-
-To change the kits directory, edit KITS_DIR at the top of the script.
+  python reorder_kits.py                          process default dir in-place
+  python reorder_kits.py --src /path/to/kits      process custom source in-place
+  python reorder_kits.py --src SRC --dst DST      copy reordered kits to DST
+  python reorder_kits.py --dry-run                preview without modifying
+  python reorder_kits.py --help                   show this message
 """
 
 
 def main():
-    import sys
-    if "--help" in sys.argv or "-h" in sys.argv:
+    parser = argparse.ArgumentParser(
+        add_help=False, usage="reorder_kits.py [--src SRC] [--dst DST] [--dry-run] [--help]")
+    parser.add_argument("--src", default=DEFAULT_KITS_DIR)
+    parser.add_argument("--dst", default=None)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--help", "-h", action="store_true")
+    args = parser.parse_args()
+
+    if args.help:
         print(HELP)
         return
 
     print("Generating silent WAV placeholder...")
     make_silent_wav(SILENT_WAV)
 
-    kit_dirs = find_kit_dirs(KITS_DIR)
+    kit_dirs = find_kit_dirs(args.src)
 
-    print(f"Found {len(kit_dirs)} unprocessed kits under {KITS_DIR}\n")
+    mode = "DRY RUN" if args.dry_run else ("COPY" if args.dst else "IN-PLACE")
+    print(f"Source : {args.src}")
+    if args.dst:
+        print(f"Output : {args.dst}")
+    print(f"Mode   : {mode}")
+    print(f"Found {len(kit_dirs)} unprocessed kits\n")
+
+    if args.dst and not args.dry_run:
+        os.makedirs(args.dst, exist_ok=True)
+
     total = 0
     for kit_dir in kit_dirs:
-        total += reorder_kit(kit_dir)
+        total += reorder_kit(kit_dir, dst_dir=args.dst, dry_run=args.dry_run)
 
-    print(f"\nDone — {total} files renamed across {len(kit_dirs)} kits.")
-    print("Each kit now has 16 files: 4 silent (top row) + 12 sounds (rows 1-3 from bottom).")
+    suffix = " (dry run — nothing written)" if args.dry_run else ""
+    print(f"\nDone — {total} files renamed across {len(kit_dirs)} kits.{suffix}")
 
 
 if __name__ == "__main__":

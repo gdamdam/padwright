@@ -44,14 +44,23 @@ Usage:
   # Source can be a folder of .zip files OR a folder of unzipped subdirectories
 """
 
-import os, re, sys, shutil, subprocess, tempfile, time, wave, zipfile
+import os, sys, shutil, tempfile
 from pathlib import Path
-from collections import defaultdict, deque
+from collections import defaultdict
+
+_TMP = tempfile.gettempdir()
+
+from sp404_core import (
+    SOUND_SLOTS, SLOT_NAMES, SUPER_FILES,
+    classify, pick_file, export, make_silent_wav,
+    list_audio, extract_audio, sanitize, ffprobe_info, sha256_file,
+    write_manifest, write_pad_map, UI,
+)
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 SRC_DIR    = Path("/Volumes/eight/ff")
 DST_DIR    = Path("/Volumes/eight/MUSIC_PRODUCTION/SP404MK2_DRUMKITS")
-SILENT_WAV = "/tmp/sp404mk2_ff_empty.wav"
+SILENT_WAV = os.path.join(_TMP, "sp404mk2_ff_empty.wav")
 
 TIER_BLOCK = 100  # ≥ this many audio files → also build category blocks
 
@@ -65,165 +74,10 @@ BATCHES = {
     6: set("yz"),
 }
 
-# ── Pad layout (file_number, type_name) ───────────────────────────────────────
-# Files 01-04 are silent placeholders (top row). Files 05-16 are sounds.
-SOUND_SLOTS = [
-    (5,  "rim"),
-    (6,  "clap"),
-    (7,  "cowbell"),
-    (8,  "perc"),
-    (9,  "low_tom"),
-    (10, "mid_tom"),
-    (11, "hi_tom"),
-    (12, "crash"),
-    (13, "kick"),
-    (14, "snare"),
-    (15, "closed_hh"),
-    (16, "open_hh"),
-]
-SLOT_NAMES = [t for _, t in SOUND_SLOTS]
-
-# Already-exported kit files used for cross-machine super banks
-SUPER_FILES = {
-    "kick":      "13_kick.wav",
-    "snare":     "14_snare.wav",
-    "closed_hh": "15_closed_hh.wav",
-    "open_hh":   "16_open_hh.wav",
-    "clap":      "06_clap.wav",
-    "perc":      "08_perc.wav",
-}
-
-# ── Classifiers (same keywords as make_kits.py) ────────────────────────────────
-CLASSIFIERS = [
-    ("kick",      ["bass drum", "bassdrum", "bass_drum",
-                   "bd a ", "bd b ", "bd c ", "/bd ", " bd ", "/bd.", " bd.", "_bd.",
-                   "/kick", "kick/", "kicks/", "kick_", "_kick.", " kick ",
-                   "bass-drum", "bassdrm", "kick shot", "/bass/", "bass/"]),
-    ("snare",     ["snare drum", "snaredrum", "snare_drum",
-                   "/snare", "snare/", "snares/", "_snare", " snare",
-                   "sd a ", "sd b ", "sd c ", "/sd ", " sd ", "/sd.", "_sd."]),
-    ("open_hh",   ["open hh", "open_hh", "openhat", "open hat",
-                   "hh open", "hh_open", " oh ", "/oh ", "_oh_", "oh a ",
-                   "oh.", "open hi", "hat open", "hihat op"]),
-    ("closed_hh", ["closed hh", "closed_hh", "closedhat", "closed hat",
-                   "hh close", "hh_close", " ch ", "/ch ", "_ch_", "/ch_", "ch a ",
-                   "ch.", " hh ", "hihat cl", "hi-hat cl", "hat close",
-                   "hihat", "hi hat", "hi-hat", "/hh", "_hh", "hats/"]),
-    ("low_tom",   ["low tom", "lo tom", "tom lo", "tom low",
-                   "floor tom", "tom a ", "tom_lo", "low_tom", "lowtom"]),
-    ("mid_tom",   ["mid tom", "tom mid", "tom_mid", "tom b ", "mid_tom", "midtom"]),
-    ("hi_tom",    ["hi tom", "high tom", "tom hi", "tom_hi",
-                   "tom c ", "hi_tom", "hitom", "hightom"]),
-    ("crash",     ["crash", "cymbal", "ride"]),
-    ("rim",       ["rimshot", "rim shot", "rim_shot", " rim ", "/rim.",
-                   "_rim.", "side stick", "sidestick", "cross stick",
-                   "crossstick", "cross-stick"]),
-    ("clap",      ["hand clap", "handclap", "hand_clap",
-                   "/clap", "clap/", "claps/", " clap", "clap_", "_clap."]),
-    ("cowbell",   ["cowbell", "cow bell", "cow_bell"]),
-    ("perc",      ["tambourine", " tamb", "tamb ", "shaker", "maracas",
-                   "conga", "bongo", "clave", "cabasa", "agogo",
-                   "timbale", "guiro", "woodblock", "quijada",
-                   "perc/", "percs/", "percussion/", "perc_", "_perc"]),
-]
-
-
-def classify(filepath):
-    """Return drum type string or None using keyword matching."""
-    p = filepath.lower().replace('\\', '/')
-    for drum_type, keywords in CLASSIFIERS:
-        for kw in keywords:
-            if kw in p:
-                return drum_type
-    # Generic fallbacks
-    if "/tom" in p or "_tom" in p or " tom" in p or "tom." in p:
-        return "low_tom"
-    if "/hh" in p or "_hh" in p or "hat" in p:
-        return "closed_hh"
-    return None
-
-
-def pick_file(candidates):
-    """Pick the middle file from a sorted list (avoids extreme variants)."""
-    if not candidates:
-        return None
-    s = sorted(candidates)
-    return s[len(s) // 2]
-
-
-def export(src, dst):
-    """Convert src to 16-bit / 48 kHz / mono WAV via ffmpeg."""
-    cmd = ["ffmpeg", "-y", "-i", src,
-           "-ac", "1", "-ar", "48000", "-sample_fmt", "s16", dst]
-    r = subprocess.run(cmd, capture_output=True)
-    return r.returncode == 0
-
-
-def make_silent_wav(path, sr=48000, ms=50):
-    n = int(sr * ms / 1000)
-    with wave.open(path, 'w') as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(sr)
-        w.writeframes(b'\x00' * n * 2)
-
-
-_AUDIO_EXTS = {'.wav', '.aif', '.aiff'}
-
-
-def list_audio(pack_path):
-    """List relative audio file names inside a zip or directory (sorted)."""
-    pack_path = Path(pack_path)
-    if pack_path.suffix.lower() == '.zip':
-        with zipfile.ZipFile(pack_path) as zf:
-            return sorted(
-                n for n in zf.namelist()
-                if not os.path.basename(n).startswith('.')
-                and Path(n).suffix.lower() in _AUDIO_EXTS
-                and not n.endswith('/')
-            )
-    else:
-        return sorted(
-            str(f.relative_to(pack_path))
-            for f in pack_path.rglob('*')
-            if f.is_file()
-            and not f.name.startswith('.')
-            and f.suffix.lower() in _AUDIO_EXTS
-        )
-
-
-def extract_audio(pack_path, tmp_dir):
-    """Extract/copy all audio files into tmp_dir. Return sorted abs paths."""
-    pack_path = Path(pack_path)
-    out = []
-    if pack_path.suffix.lower() == '.zip':
-        with zipfile.ZipFile(pack_path) as zf:
-            for member in zf.namelist():
-                if (not os.path.basename(member).startswith('.')
-                        and Path(member).suffix.lower() in _AUDIO_EXTS
-                        and not member.endswith('/')):
-                    zf.extract(member, tmp_dir)
-                    out.append(os.path.join(tmp_dir, member))
-    else:
-        for f in sorted(pack_path.rglob('*')):
-            if f.is_file() and not f.name.startswith('.') \
-                    and f.suffix.lower() in _AUDIO_EXTS:
-                rel = f.relative_to(pack_path)
-                dst = Path(tmp_dir) / rel
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(str(f), str(dst))
-                out.append(str(dst))
-    return sorted(out)
-
-
-def sanitize(s, n=20):
-    s = re.sub(r'[^a-zA-Z0-9]', '_', s)
-    return re.sub(r'_+', '_', s).strip('_')[:n] or 'pad'
-
 
 # ── Kit builder ────────────────────────────────────────────────────────────────
 
-def build_kit(audio_files, kit_dir, dry_run, ui=None):
+def build_kit(audio_files, kit_dir, dry_run, ui=None, source_map=None):
     """
     Classify files, pick one per slot, export a full 16-pad kit.
 
@@ -288,30 +142,60 @@ def build_kit(audio_files, kit_dir, dry_run, ui=None):
         print(f"    {filled:2d}/12 filled  {empty} silent  {tag}")
         return assignments
 
+    src_lookup = (lambda f: source_map.get(f, f)) if source_map else (lambda f: f)
+
     os.makedirs(kit_dir, exist_ok=True)
+
+    pads: list[dict] = []
 
     # Silent top-row pads (01-04) — always
     for i in range(1, 5):
-        shutil.copy(SILENT_WAV, os.path.join(kit_dir, f"0{i}_empty.wav"))
+        fname = f"0{i}_empty.wav"
+        shutil.copy(SILENT_WAV, os.path.join(kit_dir, fname))
+        pads.append({
+            "pad": i, "filename": fname, "type": "empty",
+            "source": None, "source_basename": None,
+            "kind": "silent",
+        })
 
     # Sound pads (05-16) — sound or silent placeholder
     for file_num, slot_type in SOUND_SLOTS:
-        dst = os.path.join(kit_dir, f"{file_num:02d}_{slot_type}.wav")
+        fname = f"{file_num:02d}_{slot_type}.wav"
+        dst = os.path.join(kit_dir, fname)
         src = assignments.get(slot_type)
         if src:
             ok = export(src, dst)
             print(f"    {file_num:02d}_{slot_type:<12} {'OK  ' if ok else 'FAIL'}  {os.path.basename(src)}")
+            info = ffprobe_info(dst) if ok else {}
+            orig = src_lookup(src)
+            pads.append({
+                "pad": file_num, "filename": fname, "type": slot_type,
+                "source": orig, "source_basename": os.path.basename(orig.split("#")[-1]),
+                "kind": "auto" if ok else "fail",
+                "sha256": sha256_file(dst) if ok else None,
+                **info,
+            })
         else:
             shutil.copy(SILENT_WAV, dst)
             print(f"    {file_num:02d}_{slot_type:<12} EMPTY (silent placeholder)")
+            pads.append({
+                "pad": file_num, "filename": fname, "type": "empty",
+                "source": None, "source_basename": None,
+                "kind": "silent",
+            })
         if ui: ui.update(slot_type)
+
+    meta = {"kind": "drumkit" if is_drum else "synth-spread",
+            "filled": filled, "empty": empty}
+    write_manifest(kit_dir, pads, meta=meta)
+    write_pad_map(kit_dir, pads, meta=meta)
 
     return assignments
 
 
 # ── Category blocks (monster kits) ────────────────────────────────────────────
 
-def build_blocks(audio_files, machine_name, blocks_dir, dry_run):
+def build_blocks(audio_files, machine_name, blocks_dir, dry_run, source_map=None):
     """
     Build per-type 16-pad banks for monster kits (≥100 files).
     Each block: up to 16 sounds of the same category, evenly sampled.
@@ -350,10 +234,30 @@ def build_blocks(audio_files, machine_name, blocks_dir, dry_run):
             continue
 
         os.makedirs(block_dir, exist_ok=True)
+        pads: list[dict] = []
+        src_lookup = (lambda f: source_map.get(f, f)) if source_map else (lambda f: f)
         for i, src in enumerate(files, 1):
             label = sanitize(Path(src).stem, 14)
-            dst = os.path.join(block_dir, f"{i:02d}_{label}.wav")
-            export(src, dst)
+            fname = f"{i:02d}_{label}.wav"
+            dst = os.path.join(block_dir, fname)
+            ok = export(src, dst)
+            info = ffprobe_info(dst) if ok else {}
+            orig = src_lookup(src)
+            pads.append({
+                "pad": i, "filename": fname,
+                "type": block_name.lower(),
+                "source": orig,
+                "source_basename": os.path.basename(orig.split("#")[-1]),
+                "kind": "auto" if ok else "fail",
+                "sha256": sha256_file(dst) if ok else None,
+                **info,
+            })
+        write_manifest(block_dir, pads, meta={"kind": "block",
+                                              "machine": machine_name,
+                                              "category": block_name})
+        write_pad_map(block_dir, pads, meta={"kind": "block",
+                                             "machine": machine_name,
+                                             "category": block_name})
 
 
 # ── Super banks ────────────────────────────────────────────────────────────────
@@ -383,164 +287,33 @@ def build_super_banks(super_data, super_dir, dry_run):
             continue
 
         os.makedirs(bank_dir, exist_ok=True)
+        pads: list[dict] = []
         for i, (machine, src) in enumerate(entries, 1):
             label = sanitize(machine, 16)
-            dst   = os.path.join(bank_dir, f"{i:02d}_{label}.wav")
+            fname = f"{i:02d}_{label}.wav"
+            dst   = os.path.join(bank_dir, fname)
             if os.path.exists(src):
                 shutil.copy(src, dst)
                 print(f"    {i:02d}_{label:<18} OK   {machine}")
+                info = ffprobe_info(dst)
+                pads.append({
+                    "pad": i, "filename": fname, "type": bank_type,
+                    "source": src, "source_basename": machine,
+                    "kind": "auto",
+                    "sha256": sha256_file(dst),
+                    **info,
+                })
             else:
                 print(f"    {i:02d}_{label:<18} MISS {machine}")
-
-
-# ── Terminal UI ────────────────────────────────────────────────────────────────
-
-def _fmt_time(seconds):
-    m, s = divmod(int(seconds), 60)
-    return f"{m}:{s:02d}"
-
-
-class UI:
-    """
-    Split-screen TUI:
-      ┌─ scroll area ──────────────────────────────────┐  (normal terminal)
-      ├─ log box (16 lines) ───────────────────────────┤  last kit output
-      ├────────────────────────────────────────────────┤  separator
-      │ [████████░░░░░░] 23/95  3:14  eta 8:20  Name  │  progress bar
-      └────────────────────────────────────────────────┘
-
-    Hijacks sys.stdout so all print() output is captured into a 16-line ring
-    buffer and rendered in the fixed log box. Falls back to plain text when
-    stdout is not a TTY.
-    """
-    LOG_H = 16   # lines in the log box
-
-    def __init__(self, total):
-        self.total  = total
-        self.done   = 0
-        self.start  = time.time()
-        self._name  = ""
-        self._buf   = deque(maxlen=self.LOG_H)
-        self._cur   = ""           # incomplete current line
-        self._real  = sys.__stdout__
-        self._tty   = self._real.isatty()
-        self._rows  = 0
-        self._cols  = 80
-
-        if self._tty:
-            try:
-                sz = os.get_terminal_size(self._real.fileno())
-                self._rows, self._cols = sz.lines, sz.columns
-                # dashboard = top border + LOG_H lines + separator + bar = LOG_H+3
-                self._dash = self.LOG_H + 3
-                if self._rows > self._dash + 3:   # need at least 3 scroll rows
-                    self._setup()
-                else:
-                    self._tty = False
-            except OSError:
-                self._tty = False
-
-        sys.stdout = self   # hijack stdout
-
-    def _setup(self):
-        scroll_end = self._rows - self._dash
-        out = []
-        out.append(f"\033[1;{scroll_end}r")          # restrict scroll region
-        for r in range(scroll_end + 1, self._rows + 1):
-            out.append(f"\033[{r};1H\033[2K")        # clear dashboard area
-        out.append(f"\033[{scroll_end};1H")           # park cursor at scroll bottom
-        self._real.write("".join(out))
-        self._real.flush()
-        self._redraw()
-
-    def _bar_str(self):
-        W       = min(36, self._cols - 36)
-        pct     = self.done / self.total if self.total else 1.0
-        filled  = int(W * pct)
-        bar     = "█" * filled + "░" * (W - filled)
-        elapsed = time.time() - self.start
-        eta_s   = ""
-        if 0 < self.done < self.total:
-            eta   = elapsed / self.done * (self.total - self.done)
-            eta_s = f"  eta {_fmt_time(eta)}"
-        label = (self._name[:24] + "…") if len(self._name) > 25 else self._name
-        return f"[{bar}] {self.done}/{self.total}  {_fmt_time(elapsed)}{eta_s}  {label}"
-
-    def _redraw(self):
-        cols    = self._cols
-        r0      = self._rows - self._dash + 1   # first row of dashboard (top border)
-        lines   = list(self._buf)
-        out     = ["\033[s"]                     # save cursor
-
-        # top border
-        out.append(f"\033[{r0};1H\033[2K{'─' * cols}")
-
-        # log lines (fill empty rows with blank)
-        for i in range(self.LOG_H):
-            row  = r0 + 1 + i
-            text = (lines[i] if i < len(lines) else "")[:cols]
-            out.append(f"\033[{row};1H\033[2K{text}")
-
-        # separator + bar
-        sep_row = r0 + 1 + self.LOG_H
-        out.append(f"\033[{sep_row};1H\033[2K{'─' * cols}")
-        out.append(f"\033[{self._rows};1H\033[2K{self._bar_str()}")
-
-        out.append("\033[u")                     # restore cursor
-        self._real.write("".join(out))
-        self._real.flush()
-
-    # ── stdout proxy ─────────────────────────────────────────────────────────
-
-    def write(self, text):
-        if not self._tty:
-            self._real.write(text)
-            return
-        parts = text.split("\n")
-        self._cur += parts[0]
-        for part in parts[1:]:
-            self._buf.append(self._cur)
-            self._cur = part
-            self._redraw()
-
-    def flush(self):
-        self._real.flush()
-
-    # ── progress control ─────────────────────────────────────────────────────
-
-    def clear(self):
-        pass   # no-op — log box handles its own display
-
-    def update(self, name=""):
-        self.done  += 1
-        self._name  = name
-        if self._tty:
-            self._redraw()
-        else:
-            self._real.write(f"\r{self._bar_str()}\n")
-            self._real.flush()
-
-    def advance(self, n, name=""):
-        self.done  = min(self.done + n, self.total)
-        self._name  = name
-        if self._tty:
-            self._redraw()
-        else:
-            self._real.write(f"\r{self._bar_str()}\n")
-            self._real.flush()
-
-    def finish(self):
-        self.done  = self.total
-        self._name = ""
-        if self._tty and self._rows:
-            self._redraw()
-            # restore full scroll region; leave cursor at bottom
-            self._real.write(f"\033[1;{self._rows}r\033[{self._rows};1H\n")
-            self._real.flush()
-        else:
-            self._real.write(f"\r{self._bar_str()}\n")
-            self._real.flush()
-        sys.stdout = self._real   # restore stdout
+                pads.append({
+                    "pad": i, "filename": fname, "type": bank_type,
+                    "source": src, "source_basename": machine,
+                    "kind": "fail",
+                })
+        write_manifest(bank_dir, pads, meta={"kind": "super",
+                                             "category": bank_type})
+        write_pad_map(bank_dir, pads, meta={"kind": "super",
+                                            "category": bank_type})
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -567,31 +340,45 @@ def dry_run_kit(audio_names, machine):
     return is_drum
 
 
-def show_status():
+def discover_packs(src_dir, use_unzipped=False):
+    """Return source packs from zip archives or immediate subdirectories."""
+    if not src_dir.exists():
+        return []
+    if use_unzipped:
+        return sorted(
+            p for p in src_dir.iterdir()
+            if p.is_dir() and not p.name.startswith('.')
+        )
+    return sorted(src_dir.glob("*.zip"))
+
+
+def show_status(src_dir=SRC_DIR, dst_dir=DST_DIR, use_unzipped=False):
     """Print how many kits are built vs total, then exit."""
-    all_zips = sorted(SRC_DIR.glob("*.zip"))
-    total = len(all_zips)
-    drumkit_dir = DST_DIR / "drumkit"
+    packs = discover_packs(src_dir, use_unzipped)
+    total = len(packs)
+    drumkit_dir = dst_dir / "drumkit"
     built = 0
     if drumkit_dir.exists():
-        for z in all_zips:
-            kit = drumkit_dir / z.stem
+        for pack in packs:
+            kit = drumkit_dir / pack.stem
             if kit.is_dir() and any(f.suffix == '.wav' for f in kit.iterdir()):
                 built += 1
     pct = built * 100 // total if total else 0
+    print(f"Source : {src_dir}")
+    print(f"Output : {dst_dir}")
     print(f"Status : {built}/{total} kits built ({pct}%)")
     print(f"Remaining : {total - built}")
     # Per-batch breakdown
     for batch_num, letters in BATCHES.items():
-        batch_zips = [z for z in all_zips if z.stem[0].lower() in letters]
+        batch_packs = [p for p in packs if p.stem[0].lower() in letters]
         b_built = sum(
-            1 for z in batch_zips
-            if (drumkit_dir / z.stem).is_dir()
-            and any(f.suffix == '.wav' for f in (drumkit_dir / z.stem).iterdir())
+            1 for pack in batch_packs
+            if (drumkit_dir / pack.stem).is_dir()
+            and any(f.suffix == '.wav' for f in (drumkit_dir / pack.stem).iterdir())
         ) if drumkit_dir.exists() else 0
-        status = "✅" if b_built == len(batch_zips) else ("🔄" if b_built > 0 else "⬜")
-        print(f"  Batch {batch_num}: {b_built:3d}/{len(batch_zips)} {status}")
-    super_dir = DST_DIR / "super"
+        status = "✅" if b_built == len(batch_packs) and batch_packs else ("🔄" if b_built > 0 else "⬜")
+        print(f"  Batch {batch_num}: {b_built:3d}/{len(batch_packs)} {status}")
+    super_dir = dst_dir / "super"
     super_status = "✅" if super_dir.exists() and any(super_dir.iterdir()) else "⬜"
     print(f"  Super banks: {super_status}")
 
@@ -670,28 +457,6 @@ def main():
             batch_num = int(a.split("=", 1)[1])
             break
 
-    if status_only:
-        show_status()
-        return
-
-    filters = [a for a in sys.argv[1:]
-               if not a.startswith("--") and not (
-                   len(sys.argv) > sys.argv.index(a) - 1
-                   and sys.argv[sys.argv.index(a) - 1] == "--batch"
-               )]
-    # cleaner filter extraction: skip the value after --batch
-    filters = []
-    skip_next = False
-    for a in sys.argv[1:]:
-        if skip_next:
-            skip_next = False
-            continue
-        if a == "--batch":
-            skip_next = True
-            continue
-        if not a.startswith("--"):
-            filters.append(a)
-
     # ── Resolve src / dst (CLI overrides defaults) ────────────────────────────
     src_dir = SRC_DIR
     dst_dir = DST_DIR
@@ -701,18 +466,29 @@ def main():
         if a == "--dst" and i + 1 < len(args):
             dst_dir = Path(args[i + 1])
 
-    # ── Discover packs: .zip files OR unzipped subdirectories ─────────────────
-    # When both exist for the same stem, --unzipped picks dirs, default picks zips.
     use_unzipped = "--unzipped" in sys.argv
 
-    if use_unzipped:
-        # Only scan directories (skip rglob cost by trusting dirs without audio check)
-        packs = sorted(
-            p for p in src_dir.iterdir()
-            if p.is_dir() and not p.name.startswith('.')
-        )
-    else:
-        packs = sorted(src_dir.glob("*.zip"))
+    if status_only:
+        show_status(src_dir, dst_dir, use_unzipped)
+        return
+
+    filters = []
+    skip_next = False
+    for a in args:
+        if skip_next:
+            skip_next = False
+            continue
+        if a in ("--batch", "--src", "--dst"):
+            skip_next = True
+            continue
+        if a.startswith("--batch="):
+            continue
+        if not a.startswith("--"):
+            filters.append(a)
+
+    # ── Discover packs: .zip files OR unzipped subdirectories ─────────────────
+    # When both exist for the same stem, --unzipped picks dirs, default picks zips.
+    packs = discover_packs(src_dir, use_unzipped)
 
     if batch_num is not None:
         letters = BATCHES.get(batch_num, set())
@@ -741,7 +517,11 @@ def main():
 
     # --super-only: collect from already-built kits then jump to super banks
     if super_only:
-        for kit_path in sorted((dst_dir / "drumkit").iterdir()):
+        drumkit_dir = dst_dir / "drumkit"
+        if not drumkit_dir.exists():
+            print(f"No existing drumkit folder found: {drumkit_dir}")
+            return
+        for kit_path in sorted(drumkit_dir.iterdir()):
             if not kit_path.is_dir():
                 continue
             for stype, fname in SUPER_FILES.items():
@@ -829,18 +609,20 @@ def main():
 
         with tempfile.TemporaryDirectory() as tmp:
             try:
-                audio_files = extract_audio(pack, tmp)
+                audio_files, source_map = extract_audio(pack, tmp)
             except Exception as e:
                 print(f"  [FAIL] extract: {e}")
                 total_skip += 1
                 if ui: ui.advance(len(SOUND_SLOTS), machine)
                 continue
 
-            build_kit(audio_files, kit_dir, dry_run=False, ui=ui)
+            build_kit(audio_files, kit_dir, dry_run=False, ui=ui,
+                      source_map=source_map)
 
             if tier == 4:
                 build_blocks(audio_files, machine,
-                             str(dst_dir / "blocks"), dry_run=False)
+                             str(dst_dir / "blocks"), dry_run=False,
+                             source_map=source_map)
 
         # Collect already-exported files for super banks (temp dir is gone)
         for stype, fname in SUPER_FILES.items():

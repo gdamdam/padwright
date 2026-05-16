@@ -44,21 +44,20 @@ Re-running is safe — already-built banks are skipped automatically.
 """
 
 import os
-import re
 import sys
-import shutil
-import subprocess
-import time
-from collections import deque
 from pathlib import Path
+
+from sp404_core import (
+    AUDIO_EXTS, UI, export, evenly_sample, shorten_name,
+    ffprobe_info, sha256_file, write_manifest, write_pad_map,
+)
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 SRC_DIR = Path("/Volumes/eight/MUSIC_PRODUCTION/SAMPLES/Cymatics")
 DST_DIR = Path("/Volumes/eight/MUSIC_PRODUCTION/SP404MK2_BREAKBEATS")
 
-MAX_SIZE   = 1 * 1024 * 1024   # 1 MB
-MAX_PADS   = 16
-AUDIO_EXTS = {".wav", ".aif", ".aiff"}
+MAX_SIZE = 1 * 1024 * 1024   # 1 MB
+MAX_PADS = 16
 
 HELP = """\
 make_breakbeats.py — Build SP-404 MK2 loop banks from a sample library.
@@ -137,37 +136,6 @@ def collect_banks(src_root: Path) -> list[tuple[str, list[Path]]]:
     return banks
 
 
-def sanitize(s: str, n: int = 20) -> str:
-    s = re.sub(r"[^a-zA-Z0-9]", "_", s)
-    return re.sub(r"_+", "_", s).strip("_")[:n] or "loop"
-
-
-def shorten_name(stem: str, n: int = 18) -> str:
-    """Strip common Cymatics prefix patterns and shorten."""
-    # Remove leading "Cymatics - " or "cymatics - "
-    stem = re.sub(r"(?i)^cymatics\s*-\s*", "", stem)
-    # Remove trailing BPM pattern like " - 130 BPM" or "130BPM"
-    stem = re.sub(r"\s*[-–]\s*\d+\s*BPM.*$", "", stem, flags=re.IGNORECASE)
-    stem = re.sub(r"\s+\d+\s*BPM.*$", "", stem, flags=re.IGNORECASE)
-    return sanitize(stem, n)
-
-
-def export(src: Path, dst: str) -> bool:
-    """Convert src to 16-bit / 48 kHz / stereo WAV via ffmpeg."""
-    cmd = ["ffmpeg", "-y", "-i", str(src),
-           "-ac", "2", "-ar", "48000", "-sample_fmt", "s16", dst]
-    r = subprocess.run(cmd, capture_output=True)
-    return r.returncode == 0
-
-
-def evenly_sample(items: list, n: int) -> list:
-    """Pick n items evenly spaced from items."""
-    if len(items) <= n:
-        return items
-    step = len(items) / n
-    return [items[int(i * step)] for i in range(n)]
-
-
 # ── Bank builder ───────────────────────────────────────────────────────────────
 
 def build_bank(loops: list[Path], bank_dir: str, dry_run: bool, ui=None) -> int:
@@ -180,15 +148,29 @@ def build_bank(loops: list[Path], bank_dir: str, dry_run: bool, ui=None) -> int:
 
     os.makedirs(bank_dir, exist_ok=True)
     ok_count = 0
+    pads: list[dict] = []
     for i, src in enumerate(files, 1):
         label = shorten_name(src.stem)
-        dst = os.path.join(bank_dir, f"{i:02d}_{label}.wav")
-        ok = export(src, dst)
+        fname = f"{i:02d}_{label}.wav"
+        dst = os.path.join(bank_dir, fname)
+        ok = export(src, dst, channels=2)
         status = "OK  " if ok else "FAIL"
         print(f"    {i:02d}_{label:<20} {status}  {src.name}")
         if ok:
             ok_count += 1
+        info = ffprobe_info(dst) if ok else {}
+        pads.append({
+            "pad": i, "filename": fname, "type": "loop",
+            "source": str(src), "source_basename": src.name,
+            "kind": "auto" if ok else "fail",
+            "sha256": sha256_file(dst) if ok else None,
+            **info,
+        })
         if ui: ui.update(src.name)
+    write_manifest(bank_dir, pads, meta={"kind": "loop_bank",
+                                         "bank": os.path.basename(bank_dir)})
+    write_pad_map(bank_dir, pads, meta={"kind": "loop_bank",
+                                        "bank": os.path.basename(bank_dir)})
     return ok_count
 
 
@@ -209,130 +191,6 @@ def show_status(src_dir: Path, dst_dir: Path) -> None:
     print(f"Output : {dst_dir}")
     print(f"Status : {built}/{total} banks built ({pct}%)")
     print(f"Remaining : {total - built}")
-
-
-# ── Terminal UI (same design as make_kits.py) ──────────────────────────────────
-
-def _fmt_time(seconds: float) -> str:
-    m, s = divmod(int(seconds), 60)
-    return f"{m}:{s:02d}"
-
-
-class UI:
-    LOG_H = 16
-
-    def __init__(self, total: int):
-        self.total = total
-        self.done  = 0
-        self.start = time.time()
-        self._name = ""
-        self._buf  = deque(maxlen=self.LOG_H)
-        self._cur  = ""
-        self._real = sys.__stdout__
-        self._tty  = self._real.isatty()
-        self._rows = 0
-        self._cols = 80
-
-        if self._tty:
-            try:
-                sz = os.get_terminal_size(self._real.fileno())
-                self._rows, self._cols = sz.lines, sz.columns
-                self._dash = self.LOG_H + 3
-                if self._rows > self._dash + 3:
-                    self._setup()
-                else:
-                    self._tty = False
-            except OSError:
-                self._tty = False
-
-        sys.stdout = self
-
-    def _setup(self):
-        scroll_end = self._rows - self._dash
-        out = [f"\033[1;{scroll_end}r"]
-        for r in range(scroll_end + 1, self._rows + 1):
-            out.append(f"\033[{r};1H\033[2K")
-        out.append(f"\033[{scroll_end};1H")
-        self._real.write("".join(out))
-        self._real.flush()
-        self._redraw()
-
-    def _bar_str(self) -> str:
-        W      = min(36, self._cols - 36)
-        pct    = self.done / self.total if self.total else 1.0
-        filled = int(W * pct)
-        bar    = "█" * filled + "░" * (W - filled)
-        elapsed = time.time() - self.start
-        eta_s  = ""
-        if 0 < self.done < self.total:
-            eta   = elapsed / self.done * (self.total - self.done)
-            eta_s = f"  eta {_fmt_time(eta)}"
-        label = (self._name[:24] + "…") if len(self._name) > 25 else self._name
-        return f"[{bar}] {self.done}/{self.total}  {_fmt_time(elapsed)}{eta_s}  {label}"
-
-    def _redraw(self):
-        cols  = self._cols
-        r0    = self._rows - self._dash + 1
-        lines = list(self._buf)
-        out   = ["\033[s"]
-        out.append(f"\033[{r0};1H\033[2K{'─' * cols}")
-        for i in range(self.LOG_H):
-            row  = r0 + 1 + i
-            text = (lines[i] if i < len(lines) else "")[:cols]
-            out.append(f"\033[{row};1H\033[2K{text}")
-        sep_row = r0 + 1 + self.LOG_H
-        out.append(f"\033[{sep_row};1H\033[2K{'─' * cols}")
-        out.append(f"\033[{self._rows};1H\033[2K{self._bar_str()}")
-        out.append("\033[u")
-        self._real.write("".join(out))
-        self._real.flush()
-
-    def write(self, text: str):
-        if not self._tty:
-            self._real.write(text)
-            return
-        parts = text.split("\n")
-        self._cur += parts[0]
-        for part in parts[1:]:
-            self._buf.append(self._cur)
-            self._cur = part
-            self._redraw()
-
-    def flush(self):
-        self._real.flush()
-
-    def clear(self):
-        pass
-
-    def update(self, name: str = ""):
-        self.done  += 1
-        self._name  = name
-        if self._tty:
-            self._redraw()
-        else:
-            self._real.write(f"\r{self._bar_str()}\n")
-            self._real.flush()
-
-    def advance(self, n: int, name: str = ""):
-        self.done  = min(self.done + n, self.total)
-        self._name  = name
-        if self._tty:
-            self._redraw()
-        else:
-            self._real.write(f"\r{self._bar_str()}\n")
-            self._real.flush()
-
-    def finish(self):
-        self.done  = self.total
-        self._name = ""
-        if self._tty and self._rows:
-            self._redraw()
-            self._real.write(f"\033[1;{self._rows}r\033[{self._rows};1H\n")
-            self._real.flush()
-        else:
-            self._real.write(f"\r{self._bar_str()}\n")
-            self._real.flush()
-        sys.stdout = self._real
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
