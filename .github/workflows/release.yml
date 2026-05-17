@@ -108,20 +108,16 @@ jobs:
       - name: Download & install ffmpeg / ffprobe (LGPL builds)
         run: node scripts/ci_download_ffmpeg.mjs --target ${{ matrix.target }}
 
-      # ── Icons ───────────────────────────────────────────────────────────
-      # Generated icons aren't committed (see .gitignore). Use the
-      # placeholder generator unless a real src-tauri/icons/source.png exists.
-      - name: Generate placeholder icon if needed
-        shell: bash
-        run: |
-          if [ ! -f src-tauri/icons/128x128.png ]; then
-            python scripts/make_placeholder_icon.py
-            (cd src-tauri && cargo tauri icon ../icon.png)
-          fi
-
-      # ── npm deps (just for tauri-cli) ───────────────────────────────────
+      # ── npm deps (provides tauri-cli for the icon-regen step + bundle) ──
       - name: Install npm deps
         run: npm install
+
+      # ── Icons ───────────────────────────────────────────────────────────
+      # The committed icon.png at repo root is the master. tauri-cli
+      # regenerates all derived files (PNG sizes, .icns, .ico, mobile +
+      # store variants) into src-tauri/icons/ on every build.
+      - name: Regenerate icons from master
+        run: npx --yes @tauri-apps/cli icon icon.png
 
       # ── Cargo check — runs AFTER sidecars + icons exist, since tauri's
       #    build.rs validates externalBin paths during configure.

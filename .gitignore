@@ -21,13 +21,16 @@ dist/
 build/
 *.spec.bak
 
-# ── Generated icons (regenerate via `cargo tauri icon` from a source PNG) ───
+# ── Icons ──────────────────────────────────────────────────────────────────
+# icon.png at repo root is the committed master — CI runs
+# `npx @tauri-apps/cli icon icon.png` to regenerate every derived file.
+# Everything under src-tauri/icons/ is regenerated and not committed.
 src-tauri/icons/*.png
 src-tauri/icons/*.icns
 src-tauri/icons/*.ico
 src-tauri/icons/android/
 src-tauri/icons/ios/
-icon.png
+icons-test/
 
 # ── Bundled sidecars (built locally; license-sensitive, large) ──────────────
 src-tauri/binaries/padwright-server-*
