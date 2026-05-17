@@ -22,7 +22,7 @@ These files are not committed (`.gitignore` excludes them). They're
 produced by:
 
 1. **`sp404-server`** — PyInstaller against `pyinstaller_app.spec` from
-   the repo root. See `md/BUILD.md`.
+   the repo root. See the README section "Building the desktop app".
 2. **`ffmpeg` / `ffprobe`** — static LGPL builds:
    - macOS: <https://evermeet.cx/ffmpeg/>
    - Windows: <https://www.gyan.dev/ffmpeg/builds/>

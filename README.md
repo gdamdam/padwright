@@ -16,22 +16,92 @@ Discovery and crate-digging live in other tools (Sononym, XO, COSMOS,
 Finder). Padwright makes sure that whatever you point it at ends up as a
 predictable, inspectable, re-curatable 16-pad bank.
 
-## Three ways to use it
+## Contents
 
-1. **Desktop app** (`.app` / `.dmg` / `.msi`). Double-click, set folders
-   in Settings, drag samples onto pads. See `md/BUILD.md` to build.
-2. **Local web UI** — `pip install -r requirements.txt && python -m web.app`.
-   Same UI, no install, runs in your default browser at `localhost:<port>`.
-3. **CLI tools** — `make_kits.py`, `make_breakbeats.py`, `swap_pad.py`,
-   `rebuild_kit.py`, `make_kit_from_crate.py`, `audit_kits.py`,
-   `reorder_kits.py`. Scriptable, batch-friendly, no GUI deps.
+- [Quick start](#quick-start)
+- [Requirements](#requirements)
+- [Using Padwright](#using-padwright)
+- [Pad layout](#pad-layout)
+- [Building the desktop app](#building-the-desktop-app)
+- [Scripts](#scripts)
+- [Manifests & pad maps](#manifests--pad-maps)
+- [Crates](#crates)
+- [Troubleshooting](#troubleshooting)
+- [What's still rough](#whats-still-rough)
+- [Direction](#direction)
+
+## Quick start
+
+Three ways to use it, depending on how comfortable you are with a terminal.
+
+### A. Desktop app (no terminal, no Python knowledge required)
+
+Pre-built `.dmg` / `.msi` / `.AppImage` releases aren't published yet
+(see [Building the desktop app](#building-the-desktop-app) to make one
+yourself). Once installed:
+
+1. Double-click the app.
+2. First-launch shows an empty library — click **Settings** and point
+   it at:
+   - **Built kits folder (root)** — where Padwright reads/writes banks.
+     Pick a folder you control (`~/Music/SP_EXPORT` is a good default).
+   - **Samples library folder** — the root of your local sample folders.
+3. Click **New crate**, drag samples onto pads, **Build kit**.
+4. In Finder, drag the 16 WAV files from the kit folder into the Roland
+   SP-404MKII app.
+
+Settings persist in a per-user config file
+(`~/Library/Application Support/com.sp404mk2.toolkit/config.json` on macOS).
+
+### B. Local web UI (Python users)
+
+```bash
+git clone <repo-url> padwright
+cd padwright
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+python3 -m web.app --root ~/Music/SP_EXPORT --samples ~/Music/Samples
+# → browser opens at localhost:<auto-port>
+```
+
+Same UI as the desktop app, served from a local FastAPI process. `--root`
+and `--samples` here override any saved config; omit them to use the
+Settings page instead.
+
+### C. Command line (scripts only)
+
+```bash
+pip install --upgrade pip   # no requirements.txt needed for CLI tools
+# (only ffmpeg + ffprobe on PATH)
+
+# Build all kits from a folder of unzipped sample packs:
+python3 make_kits.py --unzipped \
+  --src ~/Music/Samples --dst ~/Music/SP_EXPORT
+
+# Build loop banks (uses ffprobe duration ≤ 16s by default):
+python3 make_breakbeats.py --src ~/Music/Samples --dst ~/Music/SP_LOOPS
+
+# Find duplicate pads across built kits:
+python3 audit_kits.py ~/Music/SP_EXPORT --exclude-super
+
+# Replace one pad in a built kit:
+python3 swap_pad.py ~/Music/SP_EXPORT/Roland_TR808 13 ~/Music/Samples/kick.wav
+```
+
+Every script has `--help`.
 
 ## Requirements
 
-- Python 3.11+ (uses `X | Y` type hints)
-- `ffmpeg` and `ffprobe` on `PATH`
+- **Python 3.11+** (uses `X | Y` type hints)
+- **`ffmpeg` and `ffprobe`** on `PATH` (or set `FFMPEG_PATH` / `FFPROBE_PATH`)
 - A source folder of `.zip` packs, unzipped pack folders, or loose audio
 - The Roland SP-404MKII app for final drag-and-drop
+
+Web/desktop additionally need: `fastapi`, `uvicorn`, `jinja2`,
+`python-multipart` (all in `requirements.txt`).
+
+Building the desktop app additionally needs: Rust toolchain, Tauri CLI,
+Node.js ≥ 18, PyInstaller, Pillow (for placeholder icon).
 
 Output WAV formats:
 
@@ -39,7 +109,70 @@ Output WAV formats:
 - Loop banks (`make_breakbeats.py`): `48 kHz / 16-bit / stereo`
 - Silent placeholder pads: short `48 kHz / 16-bit / mono` WAVs
 
-## Pad Layout
+## Using Padwright
+
+Whether you're in the desktop app, the web UI, or the CLI, the
+end-to-end flow is the same:
+
+```text
+1. scan      a folder of samples / packs
+2. classify  by filename (kick, snare, hat, …)
+3. export    one 16-pad bank per source (deterministic)
+4. manifest  per-pad sha256/source/type/duration written next to the WAVs
+5. audit     find duplicate pads across the library
+6. swap      replace any pad with a hand-picked source
+7. crate     write a JSON file describing intent; build from it
+8. drag      the 16 WAVs into the Roland SP-404MKII app
+```
+
+### Recommended workflow (desktop app or web UI)
+
+1. **Set folders** in Settings: built-kits root + samples library.
+2. **Build a library** from the CLI once:
+   ```bash
+   python3 make_kits.py --unzipped --src <samples> --dst <root>
+   ```
+   The UI's Library view immediately reflects what's there.
+3. **Open a kit** to see the 4×4 pad grid with audio audition.
+4. **Swap any pad** that picked a mediocre source — paste an absolute
+   path or use the desktop app's drag-from-sample-browser.
+5. **Edit as crate** lets you hand-curate: dump the kit to JSON, edit,
+   rebuild without touching the other 15 pads.
+6. **Audit** to find duplicates across the library; `--exclude-super`
+   filters out super-bank entries (which are intentional copies).
+7. Drag the 16 WAVs from the kit folder into the Roland SP-404MKII app.
+
+### Recommended workflow (CLI only)
+
+```bash
+# 1. Dry-run scan first
+python3 make_kits.py --dry-run --unzipped --src <samples> --dst <root>
+
+# 2. If the breakdown looks reasonable, build for real
+python3 make_kits.py --unzipped --src <samples> --dst <root>
+
+# 3. Open the static pad-map.html for any kit to audition
+open <root>/drumkit/SomeKit/pad-map.html
+
+# 4. Swap a pad whose representative is weak
+python3 swap_pad.py <root>/drumkit/SomeKit 13 /path/to/better_kick.wav
+
+# 5. Drag the 16 WAVs into the Roland SP-404MKII app
+```
+
+Hand-curated kits via crate:
+
+```bash
+# Dump a built kit as an editable crate
+python3 make_kit_from_crate.py --from-kit <root>/drumkit/SomeKit \
+  --out my.crate.json
+
+# … edit my.crate.json in any text editor …
+# Build the curated kit
+python3 make_kit_from_crate.py my.crate.json <root>
+```
+
+## Pad layout
 
 Every 16-pad drum kit follows this layout:
 
@@ -59,6 +192,114 @@ a loop, no silent rows.
 
 Every generated bank ships with a `manifest.json` and a `pad-map.html`
 next to the WAVs. See **Manifests & pad maps** below.
+
+## Building the desktop app
+
+This produces a double-clickable `.app` (macOS), `.msi` (Windows), or
+`.deb`/`.AppImage` (Linux) that bundles the Python runtime and ffmpeg
+inside. End users don't need Python, pip, or a terminal.
+
+The architecture: Tauri's Rust shell opens a window pointing at a
+loading screen, spawns a bundled Python (PyInstaller) sidecar that
+runs the FastAPI app on a random localhost port, prints
+`SP404_PORT=<n>` from its lifespan hook, and the Rust shell then
+navigates the webview via a custom `app://` URI scheme that proxies
+every request to the sidecar. ATS / localhost-block issues are
+sidestepped because the webview never sees an `http://` URL.
+
+### One-time setup
+
+1. **Rust + Tauri CLI**
+   ```bash
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   cargo install tauri-cli@^2 --locked
+   ```
+2. **Node ≥ 18** — used only to drive a few packaging scripts.
+3. **Python ≥ 3.11** in a venv:
+   ```bash
+   python3 -m venv .venv && source .venv/bin/activate
+   pip install -r requirements.txt
+   pip install pyinstaller pillow
+   ```
+4. **App icon** (one-time):
+   ```bash
+   # Use any 1024×1024 PNG you have, or generate a placeholder:
+   python3 scripts/make_placeholder_icon.py            # writes ./icon.png
+   cd src-tauri && cargo tauri icon ../icon.png && cd ..
+   ```
+5. **Apple Developer account** (only if shipping to non-technical Mac
+   users; $99/year). Without it, users get a Gatekeeper warning —
+   right-click → Open works as a one-time bypass for friends.
+
+### Build
+
+```bash
+# 1. Bundle web/app.py into a single sp404-server executable.
+pyinstaller --clean pyinstaller_app.spec
+
+# 2. Rename it with Tauri's target-triple suffix and copy to src-tauri/binaries/
+node scripts/install_sidecar.mjs
+
+# 3. Drop static ffmpeg + ffprobe binaries into src-tauri/binaries/
+node scripts/install_ffmpeg.mjs
+# (script prints LGPL-build URLs; download, unzip, rename to
+#  ffmpeg-<target-triple> and ffprobe-<target-triple>, chmod +x)
+
+# 4. Dev run with hot reload
+npm install                # one-time
+npm run tauri:dev
+
+# 5. Production bundle (writes to src-tauri/target/release/bundle/)
+npm run tauri:build
+```
+
+Output on macOS:
+
+```text
+src-tauri/target/release/bundle/
+  dmg/Padwright_1.0.0_<arch>.dmg
+  macos/Padwright.app
+```
+
+### Signing & notarization (macOS, optional)
+
+Only needed for distribution to non-technical Mac users.
+
+```bash
+# Sign (assumes a Developer ID Application cert in your keychain)
+export APPLE_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+npm run tauri:build
+
+# Notarize the resulting .dmg
+xcrun notarytool submit \
+  "src-tauri/target/release/bundle/dmg/Padwright_1.0.0_*.dmg" \
+  --apple-id you@example.com \
+  --team-id TEAMID \
+  --password app-specific-password \
+  --wait
+
+# Staple the notarization to the .dmg so Gatekeeper trusts it offline
+xcrun stapler staple "src-tauri/target/release/bundle/dmg/Padwright_1.0.0_*.dmg"
+```
+
+### Cross-compilation
+
+Building Mac → Windows / Linux is unreliable. Use a GitHub Actions
+matrix (one runner per OS). A workflow file isn't committed yet — add
+one before the first public release if you want CI builds.
+
+### When you change code
+
+- **Python (`web/app.py` etc.):** re-run `pyinstaller --clean
+  pyinstaller_app.spec && node scripts/install_sidecar.mjs`. Tauri's
+  file watcher will spot the new sidecar and trigger a Rust rebuild.
+- **Rust (`src-tauri/src/*.rs`):** `cargo tauri dev` recompiles
+  automatically.
+- **Templates / static (`web/templates`, `web/static`):** re-bundle
+  the sidecar because they're embedded in the PyInstaller output.
+
+If the Rust target cache gets confused after a path move:
+`rm -rf src-tauri/target` and rebuild.
 
 ## Scripts
 
@@ -201,14 +442,6 @@ Source files referenced by a crate that no longer exist degrade to
 silent placeholders with a warning, so a moved source doesn't abort the
 build. See **Crates** below for the format.
 
-### Desktop app (Tauri)
-
-The same web UI can be packaged as a double-clickable desktop app
-(`.dmg` on macOS, `.msi` on Windows, `.AppImage`/`.deb` on Linux)
-that bundles the Python runtime and ffmpeg inside. End users don't
-need Python, pip, or a terminal. See `md/BUILD.md` for the full build
-recipe. Scaffold lives in `src-tauri/`.
-
 ### `web/app.py` — local browser UI (FastAPI)
 
 A small web UI on `http://localhost:<port>` that wraps the CLI tools for
@@ -238,7 +471,7 @@ manifest for dropped pads). CLI users without `--samples` retain full
 flexibility.
 
 Honors `FFMPEG_PATH` / `FFPROBE_PATH` env vars so the bundled-app build
-(see `md/BUILD.md`) can ship its own ffmpeg binaries.
+(see [Building the desktop app](#building-the-desktop-app)) can ship its own ffmpeg binaries.
 
 ### `audit_kits.py` — find duplicate pads across a built tree
 
@@ -372,38 +605,54 @@ python3 make_kit_from_crate.py 808.crate.json /Volumes/eight/SP_EXPORT
 Crates are checkable into git — they're the record of a curated kit
 that's small enough to share or version.
 
-## Recommended workflow today
+## Troubleshooting
 
-```bash
-cd /Users/gio/dev/music/sp404mk2
+### Web UI
 
-# 1. Dry-run scan of your source folder
-python3 make_kits.py --dry-run --unzipped \
-  --src /Users/gio/dev/music/SAMPLES \
-  --dst /Users/gio/dev/music/SP404MK2_EXPORT
+- **`ModuleNotFoundError: No module named 'fastapi'`** — install deps:
+  `pip install -r requirements.txt`.
+- **`ffmpeg` failures during swap / build** — set `FFMPEG_PATH` and
+  `FFPROBE_PATH` to the binaries you want, or put them on `PATH`. The
+  `/settings` page shows the resolved paths and an availability check.
+- **Audio doesn't play in the browser** — your browser must support
+  WAV (all modern ones do). The audio routes are `/audio/kit/...` and
+  `/audio/sample?path=...` and only serve files under the configured
+  roots.
 
-# 2. If the classification breakdown looks reasonable, build for real
-python3 make_kits.py --unzipped \
-  --src /Users/gio/dev/music/SAMPLES \
-  --dst /Users/gio/dev/music/SP404MK2_EXPORT
+### Desktop app
 
-# 3. Open the pad map for any kit and audition it
-open /Users/gio/dev/music/SP404MK2_EXPORT/drumkit/SomeKit/pad-map.html
+- **"sp404-server sidecar not found"** at `cargo tauri dev` —
+  re-run `pyinstaller --clean pyinstaller_app.spec && node
+  scripts/install_sidecar.mjs`. Verify
+  `src-tauri/binaries/sp404-server-<triple>` exists.
+- **Window stays on the loading screen** — open devtools
+  (right-click → Inspect) and look at the terminal log for
+  `[sp404-server]` lines. Common causes:
+  - PyInstaller missed a hidden import (e.g., `multipart`,
+    `anyio._backends._asyncio`). Add it to `hiddenimports` in
+    `pyinstaller_app.spec` and re-bundle.
+  - The sidecar's `SP404_PORT=…` line never printed (probably an
+    earlier Python traceback above it in the log).
+- **macOS "app is damaged" Gatekeeper error** on the bundle — the
+  `.app` isn't signed/notarized. For personal use, right-click →
+  Open the first time. For sharing, see
+  [Signing & notarization](#signing--notarization-macos-optional).
+- **"proxy error: Connection refused"** in devtools — the Rust
+  proxy reached the sidecar before uvicorn finished binding. The
+  current code retries for ~3s; if you still see it, the sidecar is
+  actually failing to start — check `[sp404-server]` logs.
 
-# 4. Swap any pad that didn't pick a great representative
-python3 swap_pad.py \
-  /Users/gio/dev/music/SP404MK2_EXPORT/drumkit/SomeKit \
-  13 \
-  /path/to/better_kick.wav
+### CLI
 
-# 5. Drag the 16 WAV files into the Roland SP-404MKII app
-```
-
-For hand-curated kits, skip steps 1–4 and write a crate directly:
-
-```bash
-python3 make_kit_from_crate.py my.crate.json /Volumes/eight/SP_EXPORT
-```
+- **`PermissionError: /tmp/sp404…`** — your `/tmp` has stale files
+  from a prior run with different perms. The scripts honor `TMPDIR`,
+  so `export TMPDIR=$HOME/.tmp` works; or just `rm /tmp/sp404_*.wav`.
+- **`make_kits.py` skips a kit that "already built"** — that's the
+  resume behavior. Delete the kit folder or pass a different
+  `--dst` to force a rebuild.
+- **Numeric-only packs (CR78, Linndrum) classify as "synth-spread"**
+  — expected; filename classifier has nothing to go on. Use a crate
+  to hand-curate.
 
 ## What's still rough
 
