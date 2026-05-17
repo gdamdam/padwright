@@ -27,9 +27,11 @@ wrapping the Python + FastAPI web UI, alongside the existing CLI tools.
 - **`make_kit_from_crate.py`**, **`rebuild_kit.py`**, **`swap_pad.py`**,
   **`audit_kits.py`** CLI tools alongside the existing kit/loop
   builders. Manifests + pad maps for every bank.
-- **GitHub Actions** matrix build for macOS arm64, macOS x64, Windows
-  x64, and Linux x64. Pushing a `v*.*.*` tag produces draft GitHub
-  Releases with bundles for each platform.
+- **GitHub Actions** matrix build for macOS x64 (Intel; Apple Silicon
+  via Rosetta), Windows x64, and Linux x64. Pushing a `v*.*.*` tag
+  produces draft GitHub Releases with bundles for each platform.
+  Native macOS arm64 is deferred — no static LGPL arm64
+  ffmpeg/ffprobe source has proven CI-reliable yet.
 - **Padwright** brand applied across user-visible strings *and*
   technical identifiers: Tauri bundle id `com.padwright.app`,
   Rust crate `padwright` (lib `padwright_lib`), npm package

@@ -25,6 +25,15 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+# Force UTF-8 on stdout/stderr — Windows defaults to cp1252 which can't
+# encode the box-drawing + ellipsis glyphs this script prints.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+
 
 def load_manifests(root: Path) -> list[tuple[Path, dict]]:
     """Return [(manifest_path, parsed_manifest)] for every manifest under root."""

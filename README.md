@@ -43,8 +43,8 @@ Download a pre-built bundle from the [Releases page][releases]:
 
 [releases]: ../../releases/latest
 
-- **macOS arm64 (M-series)** — `Padwright_<ver>_aarch64.dmg`
-- **macOS Intel** — `Padwright_<ver>_x64.dmg`
+- **macOS** — `Padwright_<ver>_x64.dmg` (Intel build; Apple Silicon
+  users run it via Rosetta, which macOS auto-installs on first launch)
 - **Windows x64** — `Padwright_<ver>_x64_en-US.msi`
 - **Linux x64** — `Padwright_<ver>_amd64.AppImage` or `.deb`
 
@@ -345,7 +345,7 @@ If the Rust target cache gets confused after a path move:
 
 ## Releasing (CI)
 
-GitHub Actions builds Padwright for macOS arm64, macOS x64, Windows x64,
+GitHub Actions builds Padwright for macOS x64, Windows x64,
 and Linux x64 on every semver tag push. See
 [`.github/workflows/release.yml`](.github/workflows/release.yml).
 

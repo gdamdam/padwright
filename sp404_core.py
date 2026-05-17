@@ -26,6 +26,16 @@ import zipfile
 from collections import deque
 from pathlib import Path
 
+# Force UTF-8 on stdout/stderr at import time — Windows defaults to cp1252,
+# which can't encode the arrows + ellipses our CLI tools print. Idempotent;
+# every CLI script in this repo imports sp404_core, so this fixes them all.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+
 # ── Audio constants ───────────────────────────────────────────────────────────
 AUDIO_EXTS = {".wav", ".aif", ".aiff"}
 SR = 48000

@@ -11,11 +11,11 @@
  *   Linux x86_64 / arm64    BtbN/FFmpeg-Builds (tar.xz, LGPL)
  *   Windows x86_64          BtbN/FFmpeg-Builds (zip, LGPL)
  *   macOS x86_64 (Intel)    evermeet.cx static builds
- *   macOS aarch64 (Silicon) martin-riedl/ffmpeg GitHub Releases (LGPL)
  *
- * NOTE: BtbN does not publish macOS binaries — only Linux + Windows. The
- * macOS path uses two different upstreams (evermeet, martin-riedl) which
- * have historically published reliable static, LGPL builds.
+ * NOTE: BtbN does not publish macOS binaries — only Linux + Windows.
+ * macOS arm64 is NOT supported here for v1.0.x; Apple Silicon users run
+ * the Intel build via Rosetta. See .github/workflows/release.yml matrix
+ * comment for rationale.
  *
  * Usage:
  *   node scripts/ci_download_ffmpeg.mjs --target <target-triple>
@@ -79,20 +79,6 @@ async function download(url, dst) {
     out.on('error', reject);
   });
   return statSync(dst).size;
-}
-
-async function fetchJson(url) {
-  // Authenticate api.github.com requests when a token is available — CI
-  // runners share IPs and hit the 60-req/hr unauthenticated limit fast
-  // (403 from this endpoint = rate-limited, not forbidden).
-  const headers = { Accept: 'application/vnd.github+json' };
-  const token = process.env.GITHUB_TOKEN;
-  if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await httpGet(url, { headers });
-  let body = '';
-  res.setEncoding('utf8');
-  for await (const chunk of res) body += chunk;
-  return JSON.parse(body);
 }
 
 // ── Extract helpers ─────────────────────────────────────────────────────────
@@ -170,48 +156,11 @@ async function fetchForTarget(workDir) {
     return out;
   }
 
-  // ─── martin-riedl/ffmpeg: macOS arm64 ─────────────────────────────────────
   if (target === 'aarch64-apple-darwin') {
-    console.log('source:  martin-riedl/ffmpeg GitHub Releases (macOS arm64)');
-    const meta = await fetchJson(
-      'https://api.github.com/repos/martin-riedl/ffmpeg/releases/latest'
-    );
-    console.log(`release: ${meta.tag_name}`);
-    console.log(`assets: ${(meta.assets || []).map(a => a.name).join(', ')}`);
-
-    // Pick the asset most likely to be the arm64 ffmpeg+ffprobe bundle.
-    // Strategy: prefer assets whose name suggests arm64/silicon/macos;
-    // fall back to anything that looks like a ffmpeg zip/tar archive.
-    const archAsset = (meta.assets || []).find(a =>
-      /(arm64|aarch64|silicon|m1|macos).*\.(zip|tar\.(?:xz|gz|bz2))$/i.test(a.name)
-    );
-    if (!archAsset) {
-      console.error('error: no asset matched arm64/macos pattern in '
-                    + 'martin-riedl/ffmpeg latest release.');
-      console.error('Inspect assets above and adjust scripts/ci_download_ffmpeg.mjs.');
-      process.exit(1);
-    }
-    console.log(`picked:  ${archAsset.name} (${archAsset.size.toLocaleString()} B)`);
-
-    const archive = path.join(workDir, archAsset.name);
-    await download(archAsset.browser_download_url, archive);
-
-    const into = path.join(workDir, 'extract-mr');
-    mkdirSync(into, { recursive: true });
-    if (archAsset.name.endsWith('.zip')) extractZip(archive, into);
-    else extractTarXz(archive, into);
-
-    const ffmpegBin  = findBin(into, 'ffmpeg');
-    const ffprobeBin = findBin(into, 'ffprobe');
-    if (!ffmpegBin || !ffprobeBin) {
-      console.error('error: extracted archive missing ffmpeg or ffprobe.');
-      console.error('  ffmpeg : ' + (ffmpegBin  || '(not found)'));
-      console.error('  ffprobe: ' + (ffprobeBin || '(not found)'));
-      console.error('martin-riedl may ship them in separate releases — '
-                  + 'edit ci_download_ffmpeg.mjs to fetch both.');
-      process.exit(1);
-    }
-    return { ffmpegBin, ffprobeBin };
+    console.error('error: aarch64-apple-darwin is not supported by this '
+                + 'script. Apple Silicon users run the Intel build via '
+                + 'Rosetta. See release.yml matrix comment.');
+    process.exit(2);
   }
 
   console.error(`error: unsupported target ${target}`);
