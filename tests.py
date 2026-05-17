@@ -24,6 +24,15 @@ import tempfile
 import wave
 from pathlib import Path
 
+# Force UTF-8 stdout/stderr — Windows defaults to cp1252 which can't encode
+# the arrow + other Unicode glyphs we emit in test log lines.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+
 import sp404_core as core
 
 
