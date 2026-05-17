@@ -323,8 +323,9 @@ xcrun stapler staple "src-tauri/target/release/bundle/dmg/Padwright_1.0.0_*.dmg"
 ### Cross-compilation
 
 Building Mac → Windows / Linux is unreliable. Use a GitHub Actions
-matrix (one runner per OS). A workflow file isn't committed yet — add
-one before the first public release if you want CI builds.
+matrix (one runner per OS) — `.github/workflows/release.yml` is wired
+up to do exactly that on a `v*.*.*` tag push. See **Releasing (CI)**
+below.
 
 ### When you change code
 

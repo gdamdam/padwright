@@ -94,10 +94,11 @@ jobs:
       - name: Run tests
         run: python tests.py
 
-      - name: Cargo check (verify Rust compiles before full build)
-        run: cargo check --manifest-path src-tauri/Cargo.toml --target ${{ matrix.target }}
-
       # ── Python sidecar ──────────────────────────────────────────────────
+      # Sidecars must exist before `cargo check`/Tauri build: tauri.conf.json
+      # declares them under bundle.externalBin and the build script resolves
+      # the per-target paths (binaries/padwright-server-<triple>, etc.) at
+      # configure time. Missing files = fail.
       - name: Bundle Python web/app.py into padwright-server
         run: |
           pyinstaller --clean pyinstaller_app.spec
@@ -121,6 +122,11 @@ jobs:
       # ── npm deps (just for tauri-cli) ───────────────────────────────────
       - name: Install npm deps
         run: npm install
+
+      # ── Cargo check — runs AFTER sidecars + icons exist, since tauri's
+      #    build.rs validates externalBin paths during configure.
+      - name: Cargo check (verify Rust compiles before full build)
+        run: cargo check --manifest-path src-tauri/Cargo.toml --target ${{ matrix.target }}
 
       # ── Compose release notes from CHANGELOG + template ─────────────────
       # CHANGELOG.md is the source of truth for "what changed in this
