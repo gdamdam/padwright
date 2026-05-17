@@ -27,13 +27,11 @@ wrapping the Python + FastAPI web UI, alongside the existing CLI tools.
 - **`make_kit_from_crate.py`**, **`rebuild_kit.py`**, **`swap_pad.py`**,
   **`audit_kits.py`** CLI tools alongside the existing kit/loop
   builders. Manifests + pad maps for every bank.
-- **GitHub Actions** matrix build for macOS arm64 (Apple Silicon
-  native; bundled ffmpeg is Intel-via-Rosetta), Windows x64, and Linux
-  x64. Pushing a `v*.*.*` tag produces draft GitHub Releases with
-  bundles for each platform. Intel Macs are not covered in v1.0.x
-  (macos-13 runners are queue-starved on GitHub-hosted infra, and no
-  reliable static LGPL arm64 ffmpeg source exists yet for true native
-  arm64 sidecars).
+- **No pre-built releases.** Users build the desktop bundle from
+  source per the README's *Building the desktop app* section.
+  GitHub Actions / matrix CI is intentionally not part of this repo
+  (removed after several rounds of platform-specific runner +
+  ffmpeg-source issues didn't pay off for a small audience).
 - **Padwright** brand applied across user-visible strings *and*
   technical identifiers: Tauri bundle id `com.padwright.app`,
   Rust crate `padwright` (lib `padwright_lib`), npm package
@@ -46,8 +44,6 @@ wrapping the Python + FastAPI web UI, alongside the existing CLI tools.
 - **`requirements-dev.txt`** for test + build deps (`httpx` for the
   FastAPI TestClient, `pyinstaller`, `Pillow`). The web tests no longer
   silently skip when dev deps are installed.
-- **CI gates the build on tests**: the release workflow runs
-  `python tests.py` and `cargo check` before producing any bundle.
 
 ### Changed
 

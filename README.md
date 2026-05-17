@@ -23,12 +23,10 @@ predictable, inspectable, re-curatable 16-pad bank.
 - [Using Padwright](#using-padwright)
 - [Pad layout](#pad-layout)
 - [Building the desktop app](#building-the-desktop-app)
-- [Releasing (CI)](#releasing-ci)
 - [Scripts](#scripts)
 - [Manifests & pad maps](#manifests--pad-maps)
 - [Crates](#crates)
 - [Troubleshooting](#troubleshooting)
-- [Before a release](#before-a-release)
 - [License](#license)
 - [What's still rough](#whats-still-rough)
 - [Direction](#direction)
@@ -37,27 +35,17 @@ predictable, inspectable, re-curatable 16-pad bank.
 
 Three ways to use it, depending on how comfortable you are with a terminal.
 
-### A. Desktop app (no terminal, no Python knowledge required)
+### A. Desktop app (build it yourself)
 
-Download a pre-built bundle from the [Releases page][releases]:
+There are no pre-built downloads — you build the desktop bundle from
+source on your own machine. Full instructions in
+[Building the desktop app](#building-the-desktop-app). One-time setup
+takes ~15 minutes (Rust + Node + Python venv); subsequent rebuilds are
+fast.
 
-[releases]: ../../releases/latest
-
-- **macOS Apple Silicon (M-series)** — `Padwright_<ver>_aarch64.dmg`
-  (native arm64 app; bundled ffmpeg sidecar is Intel and runs via
-  Rosetta, which macOS auto-prompts on first launch). Intel Macs are
-  not covered in v1.0.x.
-- **Windows x64** — `Padwright_<ver>_x64_en-US.msi`
-- **Linux x64** — `Padwright_<ver>_amd64.AppImage` or `.deb`
-
-> **First-launch warning, one-time:** the bundles aren't yet code-signed,
-> so the OS will warn the first time you open Padwright. This is expected.
-> - **macOS**: right-click the app → Open → confirm.
-> - **Windows**: SmartScreen → "More info" → "Run anyway".
-> - **Linux**: no warning.
->
-> See [What's still rough](#whats-still-rough) for why and how this will
-> change.
+The output is a double-clickable `.app` (macOS), `.msi` (Windows), or
+`.AppImage` / `.deb` (Linux) that bundles the Python runtime and
+ffmpeg — end-user machines don't need Python, pip, or a terminal.
 
 Once installed:
 
@@ -81,9 +69,6 @@ Settings persist in a per-user config file:
 
 (If you used a pre-1.0 dev build with the old `com.sp404mk2.toolkit`
 identifier, Padwright migrates that config automatically on first launch.)
-
-If no release matches your platform, you can build one yourself — see
-[Building the desktop app](#building-the-desktop-app).
 
 ### B. Local web UI (Python users)
 
@@ -268,8 +253,7 @@ sidestepped because the webview never sees an `http://` URL.
    cd src-tauri && cargo tauri icon ../icon.png && cd ..
    ```
    To change the icon: replace `./icon.png` (1024×1024 recommended) and
-   rerun the command above. CI regenerates derived icons from the
-   committed master on every build.
+   rerun the command above.
 5. **Apple Developer account** (only if shipping to non-technical Mac
    users; $99/year). Without it, users get a Gatekeeper warning —
    right-click → Open works as a one-time bypass for friends.
@@ -327,10 +311,11 @@ xcrun stapler staple "src-tauri/target/release/bundle/dmg/Padwright_1.0.0_*.dmg"
 
 ### Cross-compilation
 
-Building Mac → Windows / Linux is unreliable. Use a GitHub Actions
-matrix (one runner per OS) — `.github/workflows/release.yml` is wired
-up to do exactly that on a `v*.*.*` tag push. See **Releasing (CI)**
-below.
+Building Mac → Windows / Linux (or vice versa) is unreliable in
+practice. Build on each target OS: run the steps above on a real
+macOS machine for `.app`/`.dmg`, a real Windows machine for `.msi`,
+and a real Linux machine for `.AppImage`/`.deb`. A VM works if you
+don't have access to all three.
 
 ### When you change code
 
@@ -344,70 +329,6 @@ below.
 
 If the Rust target cache gets confused after a path move:
 `rm -rf src-tauri/target` and rebuild.
-
-## Releasing (CI)
-
-GitHub Actions builds Padwright for macOS arm64, Windows x64,
-and Linux x64 on every semver tag push. See
-[`.github/workflows/release.yml`](.github/workflows/release.yml).
-
-To cut a release:
-
-```bash
-# Bump versions in package.json, src-tauri/Cargo.toml, src-tauri/tauri.conf.json
-git commit -am "release v1.1.0"
-git tag v1.1.0
-git push origin main --tags
-```
-
-The workflow, in order:
-
-1. Spins up a runner per OS (matrix build, ~20–30 min) and installs
-   Rust, Node, Python, system deps, **plus `requirements-dev.txt` so
-   the full test suite runs**.
-2. Installs ffmpeg/ffprobe on the runner (via brew / apt / choco) so the
-   ffmpeg-dependent tests actually exercise the binary.
-3. **Runs `python tests.py` — a failing test aborts the run before any
-   bundle is produced.**
-4. Bundles `web/app.py` into a PyInstaller executable, renamed with
-   Tauri's target-triple suffix into `src-tauri/binaries/`.
-5. Downloads static LGPL ffmpeg + ffprobe builds (BtbN/FFmpeg-Builds)
-   and installs them as Tauri sidecars in `src-tauri/binaries/`.
-6. Installs npm deps (provides tauri-cli).
-7. Regenerates platform-specific icons from the committed root
-   `icon.png` master via `npx @tauri-apps/cli icon icon.png`.
-8. **Runs `cargo check`** — intentionally *after* sidecars and icons
-   exist, because Tauri's `build.rs` validates `bundle.externalBin`
-   paths during configure, so checking earlier would fail on a clean
-   runner.
-9. Composes release notes by merging `CHANGELOG.md` into
-   `.github/RELEASE_NOTES_TEMPLATE.md`.
-10. Runs `cargo tauri build` and uploads the bundles to a **draft**
-    release named after the tag.
-
-You review the draft on GitHub → publish when ready.
-
-Tag conventions:
-
-- `v1.2.3` → release
-- `v1.2.3-beta.1` (any tag containing `-`) → pre-release
-- Manual trigger via the Actions tab → `workflow_dispatch`
-
-Per-tag CI consumes 4 runner-instances × ~25 min on free GitHub Actions
-minutes. Macs are the expensive runners (10× the per-minute cost).
-
-### Adding code signing later (optional)
-
-Drop these secrets into the repo's Actions settings without touching
-`release.yml`:
-
-- **Mac**: `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`,
-  `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`
-- **Windows**: `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
-
-`tauri-action` picks these up automatically and signs+notarizes. The
-first-launch warnings then disappear. Apple Developer is $99/year,
-Windows code-signing certs are typically $200/year from a CA.
 
 ## Scripts
 
@@ -762,34 +683,6 @@ that's small enough to share or version.
   — expected; filename classifier has nothing to go on. Use a crate
   to hand-curate.
 
-## Before a release
-
-A short hand-checklist before pushing a `v*.*.*` tag. CI catches most of
-this but it's faster to fail locally.
-
-- [ ] Tests green locally: `pip install -r requirements.txt -r requirements-dev.txt && python tests.py`
-- [ ] `cargo check --manifest-path src-tauri/Cargo.toml` clean
-- [ ] Versions match in `package.json`, `src-tauri/Cargo.toml`,
-      `src-tauri/tauri.conf.json`
-- [ ] `CHANGELOG.md` has a new `## [x.y.z] - YYYY-MM-DD` entry above
-      `## [Unreleased]`
-- [ ] `LICENSE` and `NOTICE` present (they should be — Apache-2.0
-      shipped in v1.0.0)
-- [ ] Source icon committed at `src-tauri/icons/` (or the placeholder
-      generator will run in CI)
-- [ ] Lockfiles up to date: `package-lock.json`, `src-tauri/Cargo.lock`
-- [ ] No personal paths in any committed file (`grep -rn '/Users/\|/Volumes/'`
-      should return nothing in `.md`, `.json`, `.toml`, `.yml`, `.rs`,
-      `.py` files)
-
-After pushing the tag:
-
-- [ ] All 4 matrix jobs green (Actions tab)
-- [ ] Draft release inspected: title, body (rendered from
-      `CHANGELOG.md`), all 4 bundles attached
-- [ ] One platform installed end-to-end and a kit built through the UI
-- [ ] Release published
-
 ## License
 
 Code in this repository is licensed under the
@@ -824,17 +717,21 @@ A few specifics that aren't covered by the boilerplate:
   duration + filename pattern matching would be the next step.
 - **No SD-card writer.** A `copy-to-import` command would just be a
   `cp -R`; not worth a script until you find yourself doing it daily.
-- **Bundles aren't code-signed yet.** First-launch warnings on Mac
+- **Bundles aren't code-signed.** First-launch warnings on Mac
   (Gatekeeper) and Windows (SmartScreen) are inherent to unsigned apps.
   Workaround per-user: right-click → Open on Mac, "More info" → "Run
-  anyway" on Windows. Permanent fix: $99/year Apple Developer + ~$200/year
-  Windows CA cert, dropped into GitHub Actions secrets — see
-  [Adding code signing later](#adding-code-signing-later-optional).
+  anyway" on Windows. macOS may report the app as "damaged" instead of
+  just unidentified — fix with
+  `xattr -d com.apple.quarantine /Applications/Padwright.app`. The
+  proper fix is $99/year Apple Developer + ~$200/year Windows CA cert
+  plus the corresponding `codesign` / `signtool` steps in the macOS
+  signing recipe under *Building the desktop app*.
 - **Auto-update for the desktop app isn't wired up** (Tauri supports it
   via the updater plugin; defer until there's a v1.1).
-- **macOS universal binary not produced** — Mac users on Intel and Apple
-  Silicon download separate `.dmg`s. CI builds both. A `lipo` step
-  could merge them; skipped for now.
+- **macOS universal binary not produced** — building on an arm64 Mac
+  produces an arm64 `.app`; Intel Macs need a separate build on an
+  Intel host. A `lipo` step could merge two builds into a universal
+  binary; skipped for now.
 
 ## Direction
 

@@ -22,9 +22,10 @@ build/
 *.spec.bak
 
 # ── Icons ──────────────────────────────────────────────────────────────────
-# icon.png at repo root is the committed master — CI runs
-# `npx @tauri-apps/cli icon icon.png` to regenerate every derived file.
-# Everything under src-tauri/icons/ is regenerated and not committed.
+# icon.png at repo root is the committed master. Regenerate platform-
+# specific derived icons locally with `cargo tauri icon ../icon.png`
+# (run from src-tauri/). Everything under src-tauri/icons/ is generated
+# and not committed.
 src-tauri/icons/*.png
 src-tauri/icons/*.icns
 src-tauri/icons/*.ico
