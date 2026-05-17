@@ -105,7 +105,12 @@ jobs:
           node scripts/install_sidecar.mjs
 
       # ── ffmpeg + ffprobe sidecars ───────────────────────────────────────
+      # GITHUB_TOKEN authenticates the macOS-arm64 path's api.github.com
+      # call (martin-riedl/ffmpeg release discovery). Without it the
+      # shared-IP CI runner hits the 60-req/hr unauth rate limit fast.
       - name: Download & install ffmpeg / ffprobe (LGPL builds)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/ci_download_ffmpeg.mjs --target ${{ matrix.target }}
 
       # ── npm deps (provides tauri-cli for the icon-regen step + bundle) ──

@@ -82,7 +82,13 @@ async function download(url, dst) {
 }
 
 async function fetchJson(url) {
-  const res = await httpGet(url, { headers: { Accept: 'application/vnd.github+json' } });
+  // Authenticate api.github.com requests when a token is available — CI
+  // runners share IPs and hit the 60-req/hr unauthenticated limit fast
+  // (403 from this endpoint = rate-limited, not forbidden).
+  const headers = { Accept: 'application/vnd.github+json' };
+  const token = process.env.GITHUB_TOKEN;
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await httpGet(url, { headers });
   let body = '';
   res.setEncoding('utf8');
   for await (const chunk of res) body += chunk;
