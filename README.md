@@ -259,12 +259,15 @@ sidestepped because the webview never sees an `http://` URL.
    pip install -r requirements.txt
    pip install pyinstaller pillow
    ```
-4. **App icon** (one-time):
+4. **App icon** (one-time per clone): the committed `icon.png` at the
+   repo root is the master. Generate the platform-specific derived
+   icons (they're gitignored, so a fresh clone has none):
    ```bash
-   # Use any 1024×1024 PNG you have, or generate a placeholder:
-   python3 scripts/make_placeholder_icon.py            # writes ./icon.png
    cd src-tauri && cargo tauri icon ../icon.png && cd ..
    ```
+   To change the icon: replace `./icon.png` (1024×1024 recommended) and
+   rerun the command above. CI regenerates derived icons from the
+   committed master on every build.
 5. **Apple Developer account** (only if shipping to non-technical Mac
    users; $99/year). Without it, users get a Gatekeeper warning —
    right-click → Open works as a one-time bypass for friends.
@@ -355,21 +358,30 @@ git tag v1.1.0
 git push origin main --tags
 ```
 
-The workflow:
+The workflow, in order:
 
-1. Spins up a runner per OS (matrix build, ~20–30 min).
-2. Installs Rust, Node, Python, system deps, **plus
-   `requirements-dev.txt` so the full test suite runs**.
-3. Installs ffmpeg/ffprobe on the runner (via brew / apt / choco) so the
+1. Spins up a runner per OS (matrix build, ~20–30 min) and installs
+   Rust, Node, Python, system deps, **plus `requirements-dev.txt` so
+   the full test suite runs**.
+2. Installs ffmpeg/ffprobe on the runner (via brew / apt / choco) so the
    ffmpeg-dependent tests actually exercise the binary.
-4. **Runs `python tests.py` and `cargo check` — a failing test or
-   broken Rust build aborts the run before any bundle is produced.**
-5. Bundles `web/app.py` into a PyInstaller executable.
-6. Downloads static LGPL ffmpeg + ffprobe builds (BtbN/FFmpeg-Builds)
-   for the bundled sidecar.
-7. Generates a placeholder icon if one isn't committed.
-8. Runs `cargo tauri build` and uploads the bundles to a **draft**
-   release named after the tag.
+3. **Runs `python tests.py` — a failing test aborts the run before any
+   bundle is produced.**
+4. Bundles `web/app.py` into a PyInstaller executable, renamed with
+   Tauri's target-triple suffix into `src-tauri/binaries/`.
+5. Downloads static LGPL ffmpeg + ffprobe builds (BtbN/FFmpeg-Builds)
+   and installs them as Tauri sidecars in `src-tauri/binaries/`.
+6. Installs npm deps (provides tauri-cli).
+7. Regenerates platform-specific icons from the committed root
+   `icon.png` master via `npx @tauri-apps/cli icon icon.png`.
+8. **Runs `cargo check`** — intentionally *after* sidecars and icons
+   exist, because Tauri's `build.rs` validates `bundle.externalBin`
+   paths during configure, so checking earlier would fail on a clean
+   runner.
+9. Composes release notes by merging `CHANGELOG.md` into
+   `.github/RELEASE_NOTES_TEMPLATE.md`.
+10. Runs `cargo tauri build` and uploads the bundles to a **draft**
+    release named after the tag.
 
 You review the draft on GitHub → publish when ready.
 
