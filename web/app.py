@@ -14,7 +14,7 @@ CLI flags always win over config; an in-app /settings page writes config.
 
 When --port 0 is used, the chosen port is printed to stdout from the
 FastAPI lifespan hook (so it's emitted only after uvicorn has bound)
-as `SP404_PORT=<n>`. The Tauri parent reads that line to navigate the
+as `PADWRIGHT_PORT=<n>`. The Tauri parent reads that line to navigate the
 webview.
 """
 
@@ -93,34 +93,59 @@ STATE = State()
 # ── Config persistence ────────────────────────────────────────────────────────
 
 CONFIG_VERSION = 1
-# Keep the legacy identifier so the macOS data dir doesn't move on rebrand.
-# Visible product name is Padwright; data-on-disk continuity matters more.
-APP_ID = "com.sp404mk2.toolkit"
+APP_ID = "com.padwright.app"
+# Pre-1.0 internal builds used this identifier. We still read its config
+# on first launch if no Padwright config exists, so anyone upgrading from
+# a dev build doesn't lose their settings. Migration is one-shot: the
+# next save() writes to the new APP_ID path.
+LEGACY_APP_ID = "com.sp404mk2.toolkit"
+
+
+def _data_dir_for(app_id: str) -> Path:
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / app_id
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA") or str(Path.home())
+        # On Windows we use the short brand name as the folder.
+        return Path(base) / ("Padwright" if app_id == APP_ID else "Sp404Toolkit")
+    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    return Path(base) / ("padwright" if app_id == APP_ID else "sp404-toolkit")
 
 
 def _default_data_dir() -> Path:
     """Per-user app data dir, platform-aware."""
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / APP_ID
-    if sys.platform == "win32":
-        base = os.environ.get("APPDATA") or str(Path.home())
-        return Path(base) / "Padwright"
-    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-    return Path(base) / "padwright"
+    return _data_dir_for(APP_ID)
 
 
 def config_path() -> Path:
     return _default_data_dir() / "config.json"
 
 
+def _legacy_config_path() -> Path:
+    return _data_dir_for(LEGACY_APP_ID) / "config.json"
+
+
 def load_config() -> dict:
+    """
+    Load config.json. Falls back to the legacy (pre-rename) location once
+    so upgrade-from-dev-build users don't lose settings; subsequent saves
+    land at the new path.
+    """
     p = config_path()
-    if not p.exists():
-        return {}
-    try:
-        return json.loads(p.read_text())
-    except (json.JSONDecodeError, OSError):
-        return {}
+    if p.exists():
+        try:
+            return json.loads(p.read_text())
+        except (json.JSONDecodeError, OSError):
+            return {}
+    legacy = _legacy_config_path()
+    if legacy.exists():
+        try:
+            print(f"[padwright] migrating config from legacy path {legacy}",
+                  file=sys.stderr)
+            return json.loads(legacy.read_text())
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
 
 
 def save_config(config: dict) -> Path:
@@ -233,7 +258,7 @@ async def lifespan(_app: FastAPI):
     # safe moment to announce the port to the Tauri parent. Printing earlier
     # (before uvicorn.run) creates a race where the parent's first proxied
     # request lands before uvicorn is listening, yielding "Connection refused".
-    print(f"SP404_PORT={STATE.port}", flush=True)
+    print(f"PADWRIGHT_PORT={STATE.port}", flush=True)
     yield
 
 
@@ -573,7 +598,7 @@ def main() -> None:
 
     port = args.port or pick_free_port()
     STATE.port = port
-    # Note: SP404_PORT is printed from the lifespan hook above, *after*
+    # Note: PADWRIGHT_PORT is printed from the lifespan hook above, *after*
     # uvicorn has actually bound the socket. Printing here would race.
 
     if not args.no_browser:

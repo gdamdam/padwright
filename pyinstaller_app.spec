@@ -6,10 +6,10 @@
 #   pyinstaller --clean pyinstaller_app.spec
 #
 # Output:
-#   dist/sp404-server (or sp404-server.exe on Windows)
+#   dist/padwright-server (or padwright-server.exe on Windows)
 #
 # Run scripts/install_sidecar.mjs to rename it with the target-triple
-# suffix that Tauri expects (e.g. sp404-server-aarch64-apple-darwin) and
+# suffix that Tauri expects (e.g. padwright-server-aarch64-apple-darwin) and
 # copy it into src-tauri/binaries/.
 
 # -*- mode: python ; coding: utf-8 -*-
@@ -58,7 +58,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='sp404-server',
+    name='padwright-server',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

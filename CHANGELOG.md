@@ -30,9 +30,20 @@ wrapping the Python + FastAPI web UI, alongside the existing CLI tools.
 - **GitHub Actions** matrix build for macOS arm64, macOS x64, Windows
   x64, and Linux x64. Pushing a `v*.*.*` tag produces draft GitHub
   Releases with bundles for each platform.
-- **Padwright** brand applied to user-visible strings while the
-  technical identifier (`com.sp404mk2.toolkit`) stays put so the
-  macOS data dir doesn't move on upgrade.
+- **Padwright** brand applied across user-visible strings *and*
+  technical identifiers: Tauri bundle id `com.padwright.app`,
+  Rust crate `padwright` (lib `padwright_lib`), npm package
+  `padwright`, sidecar binary `padwright-server`, stdout marker
+  `PADWRIGHT_PORT`. Pre-1.0 dev builds used `com.sp404mk2.toolkit` —
+  the web app reads the legacy data dir on first launch and migrates
+  config to the new path automatically.
+- **Apache License 2.0** (`LICENSE`, `NOTICE`). All source code is
+  Apache-2.0; bundled ffmpeg/ffprobe ship under their own LGPL terms.
+- **`requirements-dev.txt`** for test + build deps (`httpx` for the
+  FastAPI TestClient, `pyinstaller`, `Pillow`). The web tests no longer
+  silently skip when dev deps are installed.
+- **CI gates the build on tests**: the release workflow runs
+  `python tests.py` and `cargo check` before producing any bundle.
 
 ### Changed
 

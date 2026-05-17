@@ -70,14 +70,35 @@ jobs:
             patchelf \
             libssl-dev
 
-      # ── Python sidecar ──────────────────────────────────────────────────
-      - name: Install Python deps + PyInstaller
+      # ── Python deps + dev/test deps ─────────────────────────────────────
+      - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller pillow
+          pip install -r requirements.txt -r requirements-dev.txt
 
-      - name: Bundle Python web/app.py into sp404-server
+      # ── Install ffmpeg for tests (uses the real binary in test e2e) ─────
+      # On Linux, ffmpeg comes from apt above. On macOS use Homebrew (free
+      # on GitHub-hosted runners). Windows uses choco.
+      - name: Install ffmpeg for tests
+        shell: bash
+        run: |
+          case "${{ runner.os }}" in
+            macOS)   brew install ffmpeg ;;
+            Linux)   sudo apt-get install -y ffmpeg ;;
+            Windows) choco install ffmpeg -y --no-progress ;;
+          esac
+          ffmpeg -version | head -1
+          ffprobe -version | head -1
+
+      # ── Tests gate the build — failing tests do not produce a release ───
+      - name: Run tests
+        run: python tests.py
+
+      - name: Cargo check (verify Rust compiles before full build)
+        run: cargo check --manifest-path src-tauri/Cargo.toml --target ${{ matrix.target }}
+
+      # ── Python sidecar ──────────────────────────────────────────────────
+      - name: Bundle Python web/app.py into padwright-server
         run: |
           pyinstaller --clean pyinstaller_app.spec
           node scripts/install_sidecar.mjs

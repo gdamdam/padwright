@@ -44,4 +44,4 @@ function install(name) {
   console.log(`installed: ${dst}`);
 }
 
-install('sp404-server');
+install('padwright-server');

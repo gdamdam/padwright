@@ -30,8 +30,8 @@ src-tauri/icons/ios/
 icon.png
 
 # ── Bundled sidecars (built locally; license-sensitive, large) ──────────────
-src-tauri/binaries/sp404-server-*
 src-tauri/binaries/padwright-server-*
+src-tauri/binaries/sp404-server-*
 src-tauri/binaries/ffmpeg-*
 src-tauri/binaries/ffprobe-*
 

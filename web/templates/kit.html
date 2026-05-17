@@ -6,6 +6,7 @@
   Kind: <span class="tag tag-{{ manifest.meta.kind }}">{{ manifest.meta.kind }}</span>
   · Pads: {{ manifest.pads | length }}
   · <a href="/crate?kit_rel={{ kit_rel }}">edit as crate</a>
+  {% if samples %}· <a href="/samples" target="_blank" rel="noopener">open samples browser ↗</a>{% endif %}
 </p>
 
 <table class="padgrid">
@@ -15,7 +16,7 @@
       {% set pad_num = row * 4 + col + 1 %}
       {% set p = manifest.pads | selectattr("pad", "equalto", pad_num) | first %}
       {% if p %}
-      <td class="pad pad-{{ p.type or 'empty' }}">
+      <td class="pad pad-{{ p.type or 'empty' }}" data-pad="{{ p.pad }}">
         <details>
           <summary>
             <div class="pn">{{ "%02d" % p.pad }}</div>
@@ -33,18 +34,26 @@
           <form class="swap" method="post" action="/kit/{{ kit_rel }}/swap">
             <input type="hidden" name="pad" value="{{ p.pad }}">
             <label>
-              Swap with absolute file path:
-              <input type="text" name="source" placeholder="/path/to/file.wav"
-                     list="samples-list-{{ p.pad }}" required>
+              Source path
+              <input type="text" name="source" class="swap-source"
+                     placeholder="drop a file from /samples here, or paste a path"
+                     required>
             </label>
             <label>
-              Type (optional):
+              Type (optional)
               <input type="text" name="pad_type" value="{{ p.type or '' }}">
             </label>
             <button type="submit">Swap pad</button>
+            <span class="hint" style="display:block;margin-top:4px">
+              Need to browse? <a href="/samples" target="_blank" rel="noopener">open the samples browser ↗</a>
+              and drag a file onto this pad, or use the
+              <a href="/crate?kit_rel={{ kit_rel }}">crate editor</a> for the full grid.
+            </span>
           </form>
           {% else %}
-          <p class="hint">Start the app with <code>--samples PATH</code> to enable swap.</p>
+          <p class="hint">
+            <a href="/settings">Set a samples folder in Settings</a> to enable pad swap.
+          </p>
           {% endif %}
         </details>
       </td>
@@ -54,6 +63,32 @@
   {% endfor %}
 </table>
 
-<p class="hint">Click a pad to expand swap controls. Paste any absolute path
-to a WAV/AIF file under the samples root.</p>
+<p class="hint">
+  Click a pad to expand swap controls. With Settings configured, drop any
+  WAV/AIF file from <a href="/samples">the samples browser</a> onto the pad
+  cell to fill its source field instantly.
+</p>
+
+<script>
+// Minimal drag-and-drop: drop anywhere on a pad cell to fill that pad's
+// swap-source input. Source string comes from /samples' draggable rows
+// (handled by static/crate.js too, same dataTransfer payload).
+document.querySelectorAll('td.pad').forEach(td => {
+  td.addEventListener('dragover', ev => { ev.preventDefault(); td.classList.add('dragover'); });
+  td.addEventListener('dragleave', () => td.classList.remove('dragover'));
+  td.addEventListener('drop', ev => {
+    ev.preventDefault();
+    td.classList.remove('dragover');
+    const path = ev.dataTransfer.getData('text/plain');
+    if (!path) return;
+    const input = td.querySelector('input.swap-source');
+    if (input) {
+      input.value = path;
+      // auto-expand <details> so the user sees the change
+      const det = td.querySelector('details');
+      if (det) det.open = true;
+    }
+  });
+});
+</script>
 {% endblock %}

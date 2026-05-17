@@ -1,8 +1,10 @@
 {
-  "name": "sp404-toolkit",
+  "name": "padwright",
   "version": "1.0.0",
   "private": true,
-  "description": "Padwright — Tauri desktop wrapper",
+  "description": "Padwright — SP-404MKII Bank Builder. Tauri desktop wrapper around the Python web UI.",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/padwright/padwright",
   "scripts": {
     "tauri": "tauri",
     "tauri:dev": "tauri dev",

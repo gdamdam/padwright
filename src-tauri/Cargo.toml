@@ -1,13 +1,15 @@
 [package]
-name = "sp404-toolkit"
+name = "padwright"
 version = "1.0.0"
-description = "Padwright — desktop wrapper around the Python web UI"
-authors = ["you"]
+description = "Padwright — SP-404MKII Bank Builder. Tauri desktop shell."
+authors = ["Padwright contributors"]
 edition = "2021"
 rust-version = "1.77"
+license = "Apache-2.0"
+repository = "https://github.com/padwright/padwright"
 
 [lib]
-name = "sp404_toolkit_lib"
+name = "padwright_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

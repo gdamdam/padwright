@@ -457,7 +457,7 @@ def test_web_app_routes():
         print("  skip (ffmpeg/ffprobe not on PATH)")
         return
     if not has_web_deps():
-        print("  skip (web deps missing — pip install -r requirements.txt)")
+        print("  skip (install requirements-dev.txt to enable web tests: pip install -r requirements.txt -r requirements-dev.txt)")
         return
 
     import make_kits
@@ -681,7 +681,7 @@ def test_loop_detection_uses_duration():
 def test_settings_round_trip():
     print("settings page round-trip")
     if not has_web_deps():
-        print("  skip (web deps missing)")
+        print("  skip (install requirements-dev.txt to enable web tests: pip install -r requirements.txt -r requirements-dev.txt)")
         return
     from fastapi.testclient import TestClient
     from web import app as webapp

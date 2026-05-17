@@ -2108,6 +2108,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "padwright"
+version = "1.0.0"
+dependencies = [
+ "http",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-shell",
+ "ureq",
+]
+
+[[package]]
 name = "pango"
 version = "0.18.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2965,19 +2978,6 @@ dependencies = [
  "gobject-sys",
  "libc",
  "system-deps",
-]
-
-[[package]]
-name = "sp404-toolkit"
-version = "0.1.0"
-dependencies = [
- "http",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-shell",
- "ureq",
 ]
 
 [[package]]

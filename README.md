@@ -28,6 +28,8 @@ predictable, inspectable, re-curatable 16-pad bank.
 - [Manifests & pad maps](#manifests--pad-maps)
 - [Crates](#crates)
 - [Troubleshooting](#troubleshooting)
+- [Before a release](#before-a-release)
+- [License](#license)
 - [What's still rough](#whats-still-rough)
 - [Direction](#direction)
 
@@ -67,8 +69,16 @@ Once installed:
 4. In Finder, drag the 16 WAV files from the kit folder into the Roland
    SP-404MKII app.
 
-Settings persist in a per-user config file
-(`~/Library/Application Support/com.sp404mk2.toolkit/config.json` on macOS).
+Settings persist in a per-user config file:
+
+| Platform | Path |
+| --- | --- |
+| macOS   | `~/Library/Application Support/com.padwright.app/config.json` |
+| Windows | `%APPDATA%\Padwright\config.json`                              |
+| Linux   | `~/.config/padwright/config.json`                              |
+
+(If you used a pre-1.0 dev build with the old `com.sp404mk2.toolkit`
+identifier, Padwright migrates that config automatically on first launch.)
 
 If no release matches your platform, you can build one yourself — see
 [Building the desktop app](#building-the-desktop-app).
@@ -120,8 +130,16 @@ Every script has `--help`.
 Web/desktop additionally need: `fastapi`, `uvicorn`, `jinja2`,
 `python-multipart` (all in `requirements.txt`).
 
+Running the test suite or building the bundle additionally needs:
+`httpx`, `pyinstaller`, `Pillow` (all in `requirements-dev.txt`).
+Install both with:
+
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
+```
+
 Building the desktop app additionally needs: Rust toolchain, Tauri CLI,
-Node.js ≥ 18, PyInstaller, Pillow (for placeholder icon).
+Node.js ≥ 18.
 
 Output WAV formats:
 
@@ -222,7 +240,7 @@ inside. End users don't need Python, pip, or a terminal.
 The architecture: Tauri's Rust shell opens a window pointing at a
 loading screen, spawns a bundled Python (PyInstaller) sidecar that
 runs the FastAPI app on a random localhost port, prints
-`SP404_PORT=<n>` from its lifespan hook, and the Rust shell then
+`PADWRIGHT_PORT=<n>` from its lifespan hook, and the Rust shell then
 navigates the webview via a custom `app://` URI scheme that proxies
 every request to the sidecar. ATS / localhost-block issues are
 sidestepped because the webview never sees an `http://` URL.
@@ -254,7 +272,7 @@ sidestepped because the webview never sees an `http://` URL.
 ### Build
 
 ```bash
-# 1. Bundle web/app.py into a single sp404-server executable.
+# 1. Bundle web/app.py into a single padwright-server executable.
 pyinstaller --clean pyinstaller_app.spec
 
 # 2. Rename it with Tauri's target-triple suffix and copy to src-tauri/binaries/
@@ -339,11 +357,17 @@ git push origin main --tags
 The workflow:
 
 1. Spins up a runner per OS (matrix build, ~20–30 min).
-2. Installs Rust, Node, Python, system deps.
-3. Bundles `web/app.py` into a PyInstaller executable.
-4. Downloads static LGPL ffmpeg + ffprobe builds (BtbN/FFmpeg-Builds).
-5. Generates a placeholder icon if one isn't committed.
-6. Runs `cargo tauri build` and uploads the bundles to a **draft**
+2. Installs Rust, Node, Python, system deps, **plus
+   `requirements-dev.txt` so the full test suite runs**.
+3. Installs ffmpeg/ffprobe on the runner (via brew / apt / choco) so the
+   ffmpeg-dependent tests actually exercise the binary.
+4. **Runs `python tests.py` and `cargo check` — a failing test or
+   broken Rust build aborts the run before any bundle is produced.**
+5. Bundles `web/app.py` into a PyInstaller executable.
+6. Downloads static LGPL ffmpeg + ffprobe builds (BtbN/FFmpeg-Builds)
+   for the bundled sidecar.
+7. Generates a placeholder icon if one isn't committed.
+8. Runs `cargo tauri build` and uploads the bundles to a **draft**
    release named after the tag.
 
 You review the draft on GitHub → publish when ready.
@@ -690,17 +714,17 @@ that's small enough to share or version.
 
 ### Desktop app
 
-- **"sp404-server sidecar not found"** at `cargo tauri dev` —
+- **"padwright-server sidecar not found"** at `cargo tauri dev` —
   re-run `pyinstaller --clean pyinstaller_app.spec && node
   scripts/install_sidecar.mjs`. Verify
-  `src-tauri/binaries/sp404-server-<triple>` exists.
+  `src-tauri/binaries/padwright-server-<triple>` exists.
 - **Window stays on the loading screen** — open devtools
   (right-click → Inspect) and look at the terminal log for
-  `[sp404-server]` lines. Common causes:
+  `[padwright-server]` lines. Common causes:
   - PyInstaller missed a hidden import (e.g., `multipart`,
     `anyio._backends._asyncio`). Add it to `hiddenimports` in
     `pyinstaller_app.spec` and re-bundle.
-  - The sidecar's `SP404_PORT=…` line never printed (probably an
+  - The sidecar's `PADWRIGHT_PORT=…` line never printed (probably an
     earlier Python traceback above it in the log).
 - **macOS "app is damaged" Gatekeeper error** on the bundle — the
   `.app` isn't signed/notarized. For personal use, right-click →
@@ -709,7 +733,7 @@ that's small enough to share or version.
 - **"proxy error: Connection refused"** in devtools — the Rust
   proxy reached the sidecar before uvicorn finished binding. The
   current code retries for ~3s; if you still see it, the sidecar is
-  actually failing to start — check `[sp404-server]` logs.
+  actually failing to start — check `[padwright-server]` logs.
 
 ### CLI
 
@@ -722,6 +746,56 @@ that's small enough to share or version.
 - **Numeric-only packs (CR78, Linndrum) classify as "synth-spread"**
   — expected; filename classifier has nothing to go on. Use a crate
   to hand-curate.
+
+## Before a release
+
+A short hand-checklist before pushing a `v*.*.*` tag. CI catches most of
+this but it's faster to fail locally.
+
+- [ ] Tests green locally: `pip install -r requirements.txt -r requirements-dev.txt && python tests.py`
+- [ ] `cargo check --manifest-path src-tauri/Cargo.toml` clean
+- [ ] Versions match in `package.json`, `src-tauri/Cargo.toml`,
+      `src-tauri/tauri.conf.json`
+- [ ] `CHANGELOG.md` has a new `## [x.y.z] - YYYY-MM-DD` entry above
+      `## [Unreleased]`
+- [ ] `LICENSE` and `NOTICE` present (they should be — Apache-2.0
+      shipped in v1.0.0)
+- [ ] Source icon committed at `src-tauri/icons/` (or the placeholder
+      generator will run in CI)
+- [ ] Lockfiles up to date: `package-lock.json`, `src-tauri/Cargo.lock`
+- [ ] No personal paths in any committed file (`grep -rn '/Users/\|/Volumes/'`
+      should return nothing in `.md`, `.json`, `.toml`, `.yml`, `.rs`,
+      `.py` files)
+
+After pushing the tag:
+
+- [ ] All 4 matrix jobs green (Actions tab)
+- [ ] Draft release inspected: title, body (rendered from
+      `CHANGELOG.md`), all 4 bundles attached
+- [ ] One platform installed end-to-end and a kit built through the UI
+- [ ] Release published
+
+## License
+
+Code in this repository is licensed under the
+**[Apache License, Version 2.0](LICENSE)**.
+Copyright 2026 Padwright contributors. See `NOTICE` for attributions.
+
+A few specifics that aren't covered by the boilerplate:
+
+- **Padwright name and branding** are not licensed for misleading reuse.
+  The Apache License explicitly carves trademarks out of its grant
+  (Section 6). Forks, derivatives, and modified distributions must use
+  a different product name and identifier — keep your fork's identity
+  distinct from the upstream so users don't get confused.
+- **User-provided audio** (samples, packs, exported banks) remains the
+  responsibility of the rights holder. Padwright is a tool; what you
+  feed it and what you redistribute is on you.
+- **Bundled `ffmpeg` / `ffprobe`** in the desktop releases are
+  third-party LGPL builds from the FFmpeg project, not part of the
+  Padwright source. They retain their own license. See `NOTICE`.
+- **Bundled Python runtime** ships under the Python Software Foundation
+  license. See `NOTICE`.
 
 ## What's still rough
 

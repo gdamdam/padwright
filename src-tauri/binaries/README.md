@@ -4,10 +4,10 @@ Tauri's `bundle.externalBin` looks for files named with a target-triple
 suffix:
 
 ```
-sp404-server-aarch64-apple-darwin
-sp404-server-x86_64-apple-darwin
-sp404-server-x86_64-pc-windows-msvc.exe
-sp404-server-x86_64-unknown-linux-gnu
+padwright-server-aarch64-apple-darwin
+padwright-server-x86_64-apple-darwin
+padwright-server-x86_64-pc-windows-msvc.exe
+padwright-server-x86_64-unknown-linux-gnu
 
 ffmpeg-aarch64-apple-darwin
 ffmpeg-x86_64-apple-darwin
@@ -21,7 +21,7 @@ ffprobe-x86_64-apple-darwin
 These files are not committed (`.gitignore` excludes them). They're
 produced by:
 
-1. **`sp404-server`** — PyInstaller against `pyinstaller_app.spec` from
+1. **`padwright-server`** — PyInstaller against `pyinstaller_app.spec` from
    the repo root. See the README section "Building the desktop app".
 2. **`ffmpeg` / `ffprobe`** — static LGPL builds:
    - macOS: <https://evermeet.cx/ffmpeg/>

@@ -1,0 +1,44 @@
+Padwright
+Copyright 2026 Padwright contributors
+
+This product includes software developed by the Padwright project.
+
+----
+
+Trademark / branding
+
+The "Padwright" name and any associated logos are reserved by the
+Padwright contributors. The Apache License 2.0 grants no rights to use
+those marks except as needed to factually identify the origin of the
+Work (per Section 6 of the License). Forks, derivatives, and modified
+distributions must use a different product name and identifier.
+
+----
+
+Third-party components bundled in desktop releases
+
+The Padwright desktop bundles ship two third-party binaries as Tauri
+sidecars. They are not part of the Padwright source tree and are
+covered by their own licenses:
+
+  ffmpeg, ffprobe  —  LGPL v2.1+
+    Static LGPL builds from BtbN/FFmpeg-Builds:
+    https://github.com/BtbN/FFmpeg-Builds
+    Upstream:  https://ffmpeg.org
+    License:   https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
+
+  Python runtime  —  PSF License
+    Bundled via PyInstaller. Upstream:  https://www.python.org
+    License:   https://docs.python.org/3/license.html
+
+When redistributing Padwright bundles, recipients receive these
+binaries under their respective upstream licenses, not Apache-2.0.
+
+----
+
+User content
+
+WAV files, sample packs, and exported pad banks processed by Padwright
+remain the property of their respective rights holders. Padwright
+provides no license to redistribute samples or banks you do not own;
+that responsibility rests entirely with the user.

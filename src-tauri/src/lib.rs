@@ -1,7 +1,7 @@
 // Library crate so `cargo tauri dev` and `cargo tauri build` share entry.
 //
 // Architecture:
-//   - The Python sidecar (sp404-server) runs on http://127.0.0.1:<port>.
+//   - The Python sidecar (padwright-server) runs on http://127.0.0.1:<port>.
 //   - The WebView would normally load that URL directly, but WKWebView's
 //     ATS refuses plain-HTTP loads even to localhost in many setups, and
 //     the dev binary has no Info.plist to override.
@@ -11,7 +11,7 @@
 //     custom, not http.
 //
 // Lifecycle:
-//   1. setup() spawns the sidecar, listens for `SP404_PORT=<n>` on stdout
+//   1. setup() spawns the sidecar, listens for `PADWRIGHT_PORT=<n>` on stdout
 //      to learn where it's running, stashes the URL in shared state.
 //   2. Once the URL is known, eval() into the loading window flips the
 //      location to `app://localhost/`.
@@ -78,13 +78,13 @@ pub fn run() {
 
             let sidecar = handle
                 .shell()
-                .sidecar("sp404-server")
-                .expect("sp404-server sidecar not found — did you run PyInstaller?")
+                .sidecar("padwright-server")
+                .expect("padwright-server sidecar not found — did you run PyInstaller?")
                 .args(["--port", "0", "--no-browser"])
                 .env("FFMPEG_PATH", ffmpeg)
                 .env("FFPROBE_PATH", ffprobe);
 
-            let (mut rx, child) = sidecar.spawn().expect("failed to spawn sp404-server");
+            let (mut rx, child) = sidecar.spawn().expect("failed to spawn padwright-server");
             *child_slot.lock().unwrap() = Some(child);
 
             tauri::async_runtime::spawn(async move {
@@ -93,7 +93,7 @@ pub fn run() {
                     match event {
                         CommandEvent::Stdout(b) | CommandEvent::Stderr(b) => {
                             let line = String::from_utf8_lossy(&b);
-                            eprintln!("[sp404-server] {}", line.trim_end());
+                            eprintln!("[padwright-server] {}", line.trim_end());
                             if port.is_none() {
                                 if let Some(p) = parse_port(&line) {
                                     port = Some(p);
@@ -115,7 +115,7 @@ pub fn run() {
                             }
                         }
                         CommandEvent::Terminated(payload) => {
-                            eprintln!("[sp404-server] terminated: {:?}", payload);
+                            eprintln!("[padwright-server] terminated: {:?}", payload);
                             break;
                         }
                         _ => {}
@@ -140,7 +140,7 @@ pub fn run() {
 
 fn parse_port(line: &str) -> Option<u16> {
     line.trim()
-        .strip_prefix("SP404_PORT=")?
+        .strip_prefix("PADWRIGHT_PORT=")?
         .split_whitespace()
         .next()?
         .parse()
@@ -187,7 +187,7 @@ fn proxy_to_sidecar(
     let agent = ureq::AgentBuilder::new().redirects(0).build();
 
     // Retry transport errors (Connection refused etc.) for up to ~3s. The
-    // sidecar's listener can be a beat late even after we print SP404_PORT
+    // sidecar's listener can be a beat late even after we print PADWRIGHT_PORT
     // from its lifespan hook. Application-level errors (4xx/5xx) are NOT
     // retried.
     let response: ureq::Response = {

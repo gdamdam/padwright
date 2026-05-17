@@ -1,0 +1,16 @@
+# Dev / test / build dependencies.
+#
+# Install on top of requirements.txt:
+#   pip install -r requirements.txt -r requirements-dev.txt
+#
+# Required by:
+#   tests.py            — httpx (fastapi.testclient uses it under the hood)
+#   pyinstaller_app.spec — pyinstaller (bundles web/app.py for Tauri)
+#   scripts/make_placeholder_icon.py — Pillow
+
+# fastapi.testclient backend; without it, the web tests silently skip.
+httpx>=0.27
+
+# Desktop-bundle build deps.
+pyinstaller>=6.0
+Pillow>=10.0
