@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-make_kits_ff.py — Build SP-404 MK2 drum kits from the ff archive.
+make_kits_ff.py — Build SP-404MKII drum kits from the ff archive.
 
 Source : /Volumes/eight/ff/*.zip   (470 drum machine sample packs)
 Output : /Volumes/eight/MUSIC_PRODUCTION/SP404MK2_DRUMKITS/
@@ -52,9 +52,10 @@ _TMP = tempfile.gettempdir()
 
 from sp404_core import (
     SOUND_SLOTS, SLOT_NAMES, SUPER_FILES,
+    KIND_DRUMKIT,
     classify, pick_file, export, make_silent_wav,
     list_audio, extract_audio, sanitize, ffprobe_info, sha256_file,
-    write_manifest, write_pad_map, UI,
+    write_manifest, write_pad_map, build_from_pad_list, UI,
 )
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
@@ -142,53 +143,40 @@ def build_kit(audio_files, kit_dir, dry_run, ui=None, source_map=None):
         print(f"    {filled:2d}/12 filled  {empty} silent  {tag}")
         return assignments
 
+    # Convert assignments → pad_specs for the shared exporter.
+    # `source` is the original (for the manifest); `export_source` is the
+    # temp-extracted path that ffmpeg actually reads (zips and unzipped
+    # both extract to a temp dir before classification).
     src_lookup = (lambda f: source_map.get(f, f)) if source_map else (lambda f: f)
-
-    os.makedirs(kit_dir, exist_ok=True)
-
-    pads: list[dict] = []
-
-    # Silent top-row pads (01-04) — always
-    for i in range(1, 5):
-        fname = f"0{i}_empty.wav"
-        shutil.copy(SILENT_WAV, os.path.join(kit_dir, fname))
-        pads.append({
-            "pad": i, "filename": fname, "type": "empty",
-            "source": None, "source_basename": None,
-            "kind": "silent",
+    slot_to_pad = {slot_type: pad_num for pad_num, slot_type in SOUND_SLOTS}
+    pad_specs = []
+    for slot_type, extracted in assignments.items():
+        pad_specs.append({
+            "pad": slot_to_pad[slot_type],
+            "source": src_lookup(extracted),
+            "export_source": extracted,
+            "type": slot_type,
         })
 
-    # Sound pads (05-16) — sound or silent placeholder
-    for file_num, slot_type in SOUND_SLOTS:
-        fname = f"{file_num:02d}_{slot_type}.wav"
-        dst = os.path.join(kit_dir, fname)
-        src = assignments.get(slot_type)
-        if src:
-            ok = export(src, dst)
-            print(f"    {file_num:02d}_{slot_type:<12} {'OK  ' if ok else 'FAIL'}  {os.path.basename(src)}")
-            info = ffprobe_info(dst) if ok else {}
-            orig = src_lookup(src)
-            pads.append({
-                "pad": file_num, "filename": fname, "type": slot_type,
-                "source": orig, "source_basename": os.path.basename(orig.split("#")[-1]),
-                "kind": "auto" if ok else "fail",
-                "sha256": sha256_file(dst) if ok else None,
-                **info,
-            })
-        else:
-            shutil.copy(SILENT_WAV, dst)
-            print(f"    {file_num:02d}_{slot_type:<12} EMPTY (silent placeholder)")
-            pads.append({
-                "pad": file_num, "filename": fname, "type": "empty",
-                "source": None, "source_basename": None,
-                "kind": "silent",
-            })
-        if ui: ui.update(slot_type)
+    # Preserve the existing "synth-spread" tag in the manifest meta.
+    meta_extra = {"filled": filled, "empty": empty}
+    if not is_drum:
+        meta_extra["kind"] = "synth-spread"
 
-    meta = {"kind": "drumkit" if is_drum else "synth-spread",
-            "filled": filled, "empty": empty}
-    write_manifest(kit_dir, pads, meta=meta)
-    write_pad_map(kit_dir, pads, meta=meta)
+    def _ui_tick(pad_dict):
+        # Original build_kit pulsed the UI for each of the 16 slots
+        # (including silent ones). build_from_pad_list calls on_pad_done
+        # once per pad in pad_range, matching that behavior.
+        if ui:
+            ui.update(pad_dict.get("type") or "")
+
+    build_from_pad_list(
+        kit_dir, pad_specs,
+        kind=KIND_DRUMKIT,
+        meta_extra=meta_extra,
+        silent_wav_path=SILENT_WAV,
+        on_pad_done=_ui_tick,
+    )
 
     return assignments
 
@@ -384,7 +372,7 @@ def show_status(src_dir=SRC_DIR, dst_dir=DST_DIR, use_unzipped=False):
 
 
 HELP = """\
-make_kits.py — Build SP-404 MK2 drum kits from a sample pack archive.
+make_kits.py — Build SP-404MKII drum kits from a sample pack archive.
 
 Scans a source directory of .zip files (or unzipped subfolders), classifies
 every audio file by drum type (kick, snare, hi-hat, etc.), picks one best

@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Settings — Padwright{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+
+{% if saved %}
+<p class="hint" style="color: var(--accent);">✓ Saved. Changes are live now and will persist across launches.</p>
+{% endif %}
+
+<form method="post" action="/settings" class="settings-form">
+  <label class="settings-row">
+    <span class="settings-label">Built kits folder (root)</span>
+    <input type="text" name="root" value="{{ root }}" required
+           placeholder="/Users/you/SP_EXPORT">
+    <span class="settings-hint">
+      Where Padwright reads built banks from and writes new ones to.
+      Will be created if it doesn't exist.
+    </span>
+  </label>
+
+  <label class="settings-row">
+    <span class="settings-label">Samples library folder</span>
+    <input type="text" name="samples" value="{{ samples }}"
+           placeholder="/Users/you/Samples (optional)">
+    <span class="settings-hint">
+      Source folder for the crate editor and pad-swap workflow. Sources
+      outside this folder are rejected (a safety net for the GUI). Leave
+      blank to disable the samples browser.
+    </span>
+  </label>
+
+  <button type="submit" class="primary">Save</button>
+</form>
+
+<h2>Status</h2>
+<table class="status">
+  <tr><th>Config file</th>
+      <td><code>{{ config_path }}</code>
+          <span class="muted">({% if config_exists %}exists{% else %}not yet written{% endif %})</span></td></tr>
+  <tr><th>Listening on</th>
+      <td>port {{ port }}</td></tr>
+  <tr><th>Platform</th>
+      <td>{{ platform }}</td></tr>
+  <tr><th>ffmpeg</th>
+      <td>
+        {% if ffmpeg.ok %}
+          <span class="ok">✓</span> <code>{{ ffmpeg.path }}</code>
+          {% if ffmpeg.from_env %}<span class="muted">(from $FFMPEG_PATH)</span>{% endif %}
+        {% else %}
+          <span class="bad">✗ not found</span>
+          <span class="muted">— set $FFMPEG_PATH or install ffmpeg on PATH</span>
+        {% endif %}
+      </td></tr>
+  <tr><th>ffprobe</th>
+      <td>
+        {% if ffprobe.ok %}
+          <span class="ok">✓</span> <code>{{ ffprobe.path }}</code>
+          {% if ffprobe.from_env %}<span class="muted">(from $FFPROBE_PATH)</span>{% endif %}
+        {% else %}
+          <span class="bad">✗ not found</span>
+          <span class="muted">— required for audio metadata</span>
+        {% endif %}
+      </td></tr>
+</table>
+
+<p class="hint">
+  CLI flags <code>--root</code> and <code>--samples</code> always win over
+  saved config. The desktop app launches without flags so config is the
+  source of truth there.
+</p>
+{% endblock %}

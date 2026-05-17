@@ -518,6 +518,211 @@ def test_web_app_routes():
               "manifest records web_ui as source")
 
 
+def test_audit_links_use_kit_rel():
+    """
+    Regression: audit page rendered entries without a /kit/<rel> link
+    because the route didn't pass kit_rel. The fix annotates each entry
+    with kit_rel in the route. The follow-up GET should resolve.
+    """
+    print("audit page links resolve to /kit/<rel>")
+    if not has_ffmpeg() or not has_web_deps():
+        print("  skip (ffmpeg or web deps missing)")
+        return
+    import make_kits
+    from fastapi.testclient import TestClient
+    from web import app as webapp
+
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        src = d / "src" / "K"
+        src.mkdir(parents=True)
+        # Two kits that share a source → audit will surface them
+        shared = src / "shared.wav"
+        _write_tiny_wav(shared, ms=30)
+        make_kits.SILENT_WAV = str(d / "silent.wav")
+        core.make_silent_wav(make_kits.SILENT_WAV)
+        for name in ("KitA", "KitB"):
+            make_kits.build_kit([str(shared)], str(d / "out" / name), dry_run=False)
+
+        webapp.STATE.root = (d / "out").resolve()
+        webapp.STATE.samples = src.resolve()
+        c = TestClient(webapp.app)
+        r = c.get("/audit")
+        check(r.status_code == 200, f"audit page 200 (got {r.status_code})")
+        body = r.text
+        # Every link in the audit page should be reachable
+        for path in ("/kit/KitA", "/kit/KitB"):
+            check(path in body, f"audit page contains link to {path}")
+            kit_resp = c.get(path)
+            check(kit_resp.status_code == 200,
+                  f"GET {path} from audit -> 200 (got {kit_resp.status_code})")
+
+
+def test_swap_rejects_source_outside_samples():
+    print("swap rejects sources outside samples root")
+    if not has_ffmpeg() or not has_web_deps():
+        print("  skip (ffmpeg or web deps missing)")
+        return
+    import make_kits
+    from fastapi.testclient import TestClient
+    from web import app as webapp
+
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        # Sample lives inside `samples_root`; intruder lives outside.
+        samples_root = d / "samples"
+        samples_root.mkdir()
+        inside = samples_root / "ok.wav"
+        _write_tiny_wav(inside)
+        outside = d / "outside.wav"
+        _write_tiny_wav(outside, ms=40)
+
+        make_kits.SILENT_WAV = str(d / "silent.wav")
+        core.make_silent_wav(make_kits.SILENT_WAV)
+        make_kits.build_kit([str(inside)], str(d / "out" / "K"), dry_run=False)
+
+        webapp.STATE.root = (d / "out").resolve()
+        webapp.STATE.samples = samples_root.resolve()
+        c = TestClient(webapp.app)
+
+        r = c.post("/kit/K/swap",
+                   data={"pad": "13", "source": str(outside), "pad_type": "kick"},
+                   follow_redirects=False)
+        check(r.status_code == 400,
+              f"swap with outside source -> 400 (got {r.status_code})")
+        # Source inside samples → still works
+        r = c.post("/kit/K/swap",
+                   data={"pad": "13", "source": str(inside), "pad_type": "kick"},
+                   follow_redirects=False)
+        check(r.status_code == 303,
+              f"swap with inside source -> 303 (got {r.status_code})")
+
+
+def test_crate_build_drops_source_outside_samples():
+    print("crate build silences sources outside samples root")
+    if not has_ffmpeg() or not has_web_deps():
+        print("  skip (ffmpeg or web deps missing)")
+        return
+    from fastapi.testclient import TestClient
+    from web import app as webapp
+
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        samples_root = d / "samples"
+        samples_root.mkdir()
+        inside = samples_root / "ok.wav"
+        _write_tiny_wav(inside)
+        outside = d / "outside.wav"
+        _write_tiny_wav(outside, ms=40)
+
+        out_root = d / "out"
+        out_root.mkdir()
+        webapp.STATE.root = out_root.resolve()
+        webapp.STATE.samples = samples_root.resolve()
+        c = TestClient(webapp.app)
+
+        pads = [
+            {"pad": 13, "source": str(inside), "type": "kick"},
+            {"pad": 14, "source": str(outside), "type": "snare"},
+        ]
+        r = c.post("/crate/build",
+                   data={"name": "Mixed", "kind": "drumkit",
+                         "pad_json": json.dumps(pads)},
+                   follow_redirects=False)
+        check(r.status_code == 303, f"build -> 303 (got {r.status_code})")
+        m = json.loads((out_root / "Mixed" / "manifest.json").read_text())
+        kick = next(p for p in m["pads"] if p["pad"] == 13)
+        snare = next(p for p in m["pads"] if p["pad"] == 14)
+        check(kick["kind"] == "auto", "inside-source pad built normally")
+        check(snare["kind"] == "silent",
+              "outside-source pad fell back to silent (not 'fail')")
+        warnings = m["meta"].get("warnings") or []
+        check(any("pad 14" in w and "samples root" in w for w in warnings),
+              f"manifest records warning for pad 14 (warnings={warnings})")
+
+
+def test_loop_detection_uses_duration():
+    """
+    Loops are now identified by duration ≤ MAX_LOOP_SECONDS (via ffprobe).
+    A long file inside a 'loop'-named folder must NOT qualify even if small;
+    a short file qualifies even if it exceeds the legacy 1 MB heuristic.
+    """
+    print("loop detection — ffprobe duration heuristic")
+    if not has_ffmpeg():
+        print("  skip (ffmpeg/ffprobe not on PATH)")
+        return
+    import make_breakbeats
+
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        loop_dir = d / "loops"
+        loop_dir.mkdir()
+        # A "real" loop — 2 seconds, well under the threshold
+        short = loop_dir / "short.wav"
+        _write_tiny_wav(short, ms=2000)
+        # A bogus "loop" — 30 seconds, should be rejected
+        long_ = loop_dir / "stem_30s.wav"
+        _write_tiny_wav(long_, ms=30000)
+
+        # Force-default 8s threshold to make the test deterministic
+        check(make_breakbeats.is_loop_file(short, d, max_seconds=8.0),
+              "short loop (2s) accepted")
+        check(not make_breakbeats.is_loop_file(long_, d, max_seconds=8.0),
+              "long stem (30s) rejected even though path contains 'loop'")
+
+        # Non-loop folder name (no "loop" in path) — both rejected regardless
+        other_dir = d / "stems"
+        other_dir.mkdir()
+        _write_tiny_wav(other_dir / "x.wav", ms=2000)
+        check(not make_breakbeats.is_loop_file(other_dir / "x.wav", d),
+              "file outside loop-named folder rejected")
+
+
+def test_settings_round_trip():
+    print("settings page round-trip")
+    if not has_web_deps():
+        print("  skip (web deps missing)")
+        return
+    from fastapi.testclient import TestClient
+    from web import app as webapp
+
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        # Point STATE somewhere harmless first
+        webapp.STATE.root = d.resolve()
+        webapp.STATE.samples = None
+
+        c = TestClient(webapp.app)
+        r = c.get("/settings")
+        check(r.status_code == 200, f"GET /settings -> 200 (got {r.status_code})")
+        check("Settings" in r.text, "settings page renders heading")
+
+        # Use the in-flight STATE.root rather than touching the user's real
+        # config file: monkeypatch config_path to point inside d.
+        cfg_path = d / "config.json"
+        webapp.config_path = lambda: cfg_path
+
+        new_root = d / "new_kits"
+        new_root.mkdir()
+        new_samples = d / "new_samples"
+        new_samples.mkdir()
+        r = c.post("/settings",
+                   data={"root": str(new_root), "samples": str(new_samples)},
+                   follow_redirects=False)
+        check(r.status_code == 303,
+              f"POST /settings -> 303 (got {r.status_code})")
+        check(webapp.STATE.root == new_root.resolve(),
+              "STATE.root updated in memory")
+        check(webapp.STATE.samples == new_samples.resolve(),
+              "STATE.samples updated in memory")
+        check(cfg_path.exists(), "config.json written")
+        cfg = json.loads(cfg_path.read_text())
+        check(cfg["root"] == str(new_root.resolve()),
+              "config root persisted")
+        check(cfg["samples"] == str(new_samples.resolve()),
+              "config samples persisted")
+
+
 def main():
     failures = 0
     for fn in [test_classify, test_pad_layout,
@@ -527,7 +732,12 @@ def main():
                test_crate_roundtrip_e2e,
                test_crate_missing_source_falls_back_silent,
                test_audit_kits_e2e,
-               test_web_app_routes]:
+               test_web_app_routes,
+               test_audit_links_use_kit_rel,
+               test_swap_rejects_source_outside_samples,
+               test_crate_build_drops_source_outside_samples,
+               test_loop_detection_uses_duration,
+               test_settings_round_trip]:
         try:
             fn()
         except AssertionError as e:

@@ -1,4 +1,4 @@
-"""Shared core for SP-404 MK2 kit/loop builders.
+"""Shared core for SP-404MKII kit/loop builders.
 
 This module is the single source of truth for things that used to be
 duplicated across make_kits.py, make_breakbeats.py, and reorder_kits.py:
@@ -425,7 +425,7 @@ def write_pad_map(kit_dir: str | Path, pads: list[dict], meta: dict | None = Non
 
     html = f"""<!doctype html>
 <html><head><meta charset="utf-8">
-<title>{kit_name} — SP-404 MK2 pad map</title>
+<title>{kit_name} — SP-404MKII pad map</title>
 <style>
   body {{ font-family: -apple-system, system-ui, sans-serif;
          background:#111; color:#eee; padding:20px; margin:0; }}
@@ -491,14 +491,28 @@ def build_from_pad_list(
     meta_extra: dict | None = None,
     silent_wav_path: str | None = None,
     dry_run: bool = False,
+    on_pad_done=None,
 ) -> list[dict]:
     """
     Export a bank from a list of pad specs and write manifest + pad-map.
 
-    pad_specs: each entry shaped like {"pad": int, "source": str|None,
-               "type": str|None}. Missing pad numbers are filled per `kind`
-               (silent for drumkit pads 1-4 and any gaps; silent for loop_bank
-               gaps; just skipped for block/super).
+    pad_specs: each entry shaped like:
+      {
+        "pad": int,
+        "source": str | None,         # what gets recorded in manifest
+        "export_source": str | None,  # what's fed to ffmpeg; defaults to source
+        "type": str | None,
+      }
+
+    The `export_source` split exists for builds that originate from a temp
+    extraction dir (zip packs etc.): ffmpeg reads from the temp copy, but
+    the manifest records the original path for provenance/rebuilds.
+
+    Missing pad numbers are filled per `kind` (silent for drumkit pads 1-4
+    and any gaps; silent for loop_bank gaps; just skipped for block/super).
+
+    `on_pad_done(pad_dict)` if provided is called after each pad is processed
+    (silent or exported). Used by make_kits.build_kit for progress UI.
 
     Returns the manifest pad list that was written. With dry_run=True nothing
     is written; the function returns the would-be manifest entries.
@@ -528,6 +542,7 @@ def build_from_pad_list(
     for pad in pad_range:
         spec = by_pad.get(pad, {})
         source = spec.get("source") or None
+        export_source = spec.get("export_source") or source
         type_label = spec.get("type")
         fname = _filename_for(kind, pad, type_label, source)
         dst = dst_dir / fname
@@ -535,37 +550,50 @@ def build_from_pad_list(
         if dry_run:
             action = "silent" if not source else f"export {source}"
             print(f"  pad {pad:02d}  {fname:<24}  {action}")
-            out_pads.append({
+            pad_dict = {
                 "pad": pad, "filename": fname,
                 "type": type_label or ("empty" if not source else None),
                 "source": source,
                 "source_basename": os.path.basename(source) if source else None,
                 "kind": "silent" if not source else "auto",
-            })
+            }
+            out_pads.append(pad_dict)
+            if on_pad_done:
+                on_pad_done(pad_dict)
             continue
 
         if not source:
             shutil.copy(silent_wav_path, dst)
-            out_pads.append({
+            pad_dict = {
                 "pad": pad, "filename": fname, "type": "empty",
                 "source": None, "source_basename": None,
                 "kind": "silent",
-            })
+            }
+            out_pads.append(pad_dict)
             print(f"  pad {pad:02d}  {fname:<24}  SILENT")
+            if on_pad_done:
+                on_pad_done(pad_dict)
             continue
 
-        ok = export(source, str(dst), channels=ch)
+        ok = export(export_source, str(dst), channels=ch)
         info = ffprobe_info(dst) if ok else {}
-        out_pads.append({
+        # source_basename takes its tail from the manifest source (may be
+        # "/path/to/pack.zip#member.wav" for zip-extracted builds; we
+        # strip the zip prefix for display).
+        bn = os.path.basename(str(source).split("#")[-1])
+        pad_dict = {
             "pad": pad, "filename": fname,
             "type": type_label or ("loop" if kind == KIND_LOOPBANK else None),
             "source": source,
-            "source_basename": os.path.basename(source),
+            "source_basename": bn,
             "kind": "auto" if ok else "fail",
             "sha256": sha256_file(dst) if ok else None,
             **info,
-        })
-        print(f"  pad {pad:02d}  {fname:<24}  {'OK' if ok else 'FAIL'}  {os.path.basename(source)}")
+        }
+        out_pads.append(pad_dict)
+        print(f"  pad {pad:02d}  {fname:<24}  {'OK' if ok else 'FAIL'}  {bn}")
+        if on_pad_done:
+            on_pad_done(pad_dict)
 
     if not dry_run:
         # Clean up the local silent placeholder so it doesn't pollute the bank.

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-swap_pad.py — Replace one pad in an already-built SP-404 MK2 bank.
+swap_pad.py — Replace one pad in an already-built SP-404MKII bank.
 
 The manifest written by make_kits.py / make_breakbeats.py is the source of
 truth. This script re-exports a single pad from a new source file, updates

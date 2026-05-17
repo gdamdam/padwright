@@ -1,10 +1,10 @@
-// Crate editor: sample browser + drag-to-pad + form serialization.
+// Crate editor — sample browser + drag-to-pad + form serialization.
 
 const browserEl = document.getElementById('samples-browser');
-const formEl = document.getElementById('crateForm');
+const formEl    = document.getElementById('crateForm');
 const padJsonEl = document.getElementById('pad_json');
 
-// ── Sample browser ────────────────────────────────────────────────────────
+// ── Sample browser (folder tree, audition, drag handles) ────────────────────
 async function loadFolder(cwd) {
   if (!browserEl) return;
   const r = await fetch('/api/samples?path=' + encodeURIComponent(cwd));
@@ -20,16 +20,16 @@ async function loadFolder(cwd) {
 function renderFolder(data) {
   const parts = ['<ul class="files">'];
   if (data.parent !== null) {
-    parts.push(`<li class="folder" data-go="${escapeAttr(data.parent)}">⬑ up</li>`);
+    parts.push(`<li class="folder" data-go="${attr(data.parent)}">⬑ up</li>`);
   }
   for (const f of data.folders) {
     const path = data.cwd ? `${data.cwd}/${f}` : f;
-    parts.push(`<li class="folder" data-go="${escapeAttr(path)}">📁 ${escapeHtml(f)}</li>`);
+    parts.push(`<li class="folder" data-go="${attr(path)}">📁 ${esc(f)}</li>`);
   }
   for (const f of data.files) {
     parts.push(`
-      <li draggable="true" data-abs="${escapeAttr(f.abs)}">
-        <span class="fn">${escapeHtml(f.name)}</span>
+      <li draggable="true" data-abs="${attr(f.abs)}">
+        <span class="fn">${esc(f.name)}</span>
         <span class="sz">${(f.size / 1024).toFixed(1)} KB</span>
         <audio controls preload="none" src="/audio/sample?path=${encodeURIComponent(f.abs)}"></audio>
       </li>`);
@@ -50,8 +50,22 @@ function renderFolder(data) {
 
 if (browserEl) loadFolder('');
 
-// ── Drag onto pad ─────────────────────────────────────────────────────────
-document.querySelectorAll('td.pad').forEach(td => {
+// ── Pad assignment ──────────────────────────────────────────────────────────
+function setPadSource(td, abs) {
+  const input  = td.querySelector('.src-input');
+  const disp   = td.querySelector('.src-display');
+  const audio  = td.querySelector('.pad-audio');
+  input.value  = abs || '';
+  disp.title   = abs || '';
+  disp.textContent = abs ? abs.split('/').pop() : '(drop here)';
+  if (audio) {
+    audio.src = abs ? '/audio/sample?path=' + encodeURIComponent(abs) : '';
+    audio.load();
+  }
+  td.dataset.filled = abs ? '1' : '0';
+}
+
+document.querySelectorAll('td.crate-pad').forEach(td => {
   td.addEventListener('dragover', ev => {
     ev.preventDefault();
     td.classList.add('dragover');
@@ -61,27 +75,34 @@ document.querySelectorAll('td.pad').forEach(td => {
     ev.preventDefault();
     td.classList.remove('dragover');
     const path = ev.dataTransfer.getData('text/plain');
-    const input = td.querySelector('.src-input');
-    if (input) input.value = path;
+    if (path) setPadSource(td, path);
   });
+  // Sync color when type dropdown changes
+  const typeSel = td.querySelector('.type-input');
+  if (typeSel) {
+    typeSel.addEventListener('change', () => {
+      td.className = td.className.split(/\s+/)
+        .filter(c => !c.startsWith('pad-')).join(' ');
+      td.classList.add('pad-' + (typeSel.value || 'empty'));
+    });
+  }
 });
 
-// ── Clear buttons ────────────────────────────────────────────────────────
 document.querySelectorAll('.clearbtn').forEach(btn => {
   btn.addEventListener('click', () => {
-    const pad = btn.dataset.pad;
-    document.querySelector(`.src-input[data-pad="${pad}"]`).value = '';
+    const td = btn.closest('td.crate-pad');
+    if (td) setPadSource(td, '');
   });
 });
 
-// ── Serialize form ────────────────────────────────────────────────────────
+// ── Form submit: serialize all pad inputs to a single JSON field ───────────
 formEl.addEventListener('submit', ev => {
   const specs = [];
   document.querySelectorAll('.src-input').forEach(input => {
     const pad = parseInt(input.dataset.pad, 10);
     const source = input.value.trim();
-    const typeInput = document.querySelector(`.type-input[data-pad="${pad}"]`);
-    const type = typeInput ? typeInput.value.trim() : '';
+    const typeSel = document.querySelector(`.type-input[data-pad="${pad}"]`);
+    const type = typeSel ? typeSel.value.trim() : '';
     if (source || type) {
       specs.push({pad, source: source || null, type: type || null});
     }
@@ -89,9 +110,9 @@ formEl.addEventListener('submit', ev => {
   padJsonEl.value = JSON.stringify(specs);
 });
 
-// ── Helpers ───────────────────────────────────────────────────────────────
-function escapeHtml(s) {
+// ── Helpers ────────────────────────────────────────────────────────────────
+function esc(s) {
   return s.replace(/[&<>"']/g, c =>
     ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
 }
-function escapeAttr(s) { return escapeHtml(s); }
+function attr(s) { return esc(s); }

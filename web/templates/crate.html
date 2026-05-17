@@ -2,21 +2,30 @@
 {% block title %}Crate editor — {{ crate.name }}{% endblock %}
 {% block content %}
 <h1>Crate editor</h1>
+<p class="hint">
+  Pick a source for each pad. Drag from the samples browser below, or click a pad to
+  toggle the in-pad input. Sources outside the samples root are rejected on build.
+</p>
 
 <form id="crateForm" method="post" action="/crate/build">
   <div class="cratemeta">
-    <label>Name <input type="text" name="name" value="{{ crate.name }}" required></label>
-    <label>Kind
+    <label>
+      Name
+      <input type="text" name="name" value="{{ crate.name }}" required>
+    </label>
+    <label>
+      Kind
       <select name="kind">
-        <option value="drumkit" {% if crate.kind == 'drumkit' %}selected{% endif %}>drumkit</option>
+        <option value="drumkit"   {% if crate.kind == 'drumkit'   %}selected{% endif %}>drumkit</option>
         <option value="loop_bank" {% if crate.kind == 'loop_bank' %}selected{% endif %}>loop_bank</option>
-        <option value="block" {% if crate.kind == 'block' %}selected{% endif %}>block</option>
-        <option value="super" {% if crate.kind == 'super' %}selected{% endif %}>super</option>
+        <option value="block"     {% if crate.kind == 'block'     %}selected{% endif %}>block</option>
+        <option value="super"     {% if crate.kind == 'super'     %}selected{% endif %}>super</option>
       </select>
     </label>
+    <button type="submit" id="buildBtn" class="primary">Build kit →</button>
   </div>
 
-  <table class="padgrid">
+  <table class="padgrid crate-grid">
     {% for row in range(4) %}
     <tr>
       {% for col in range(4) %}
@@ -26,15 +35,28 @@
         {% for sn, st in sound_slots %}
           {% if sn == pad_num %}{% set default_type = st %}{% endif %}
         {% endfor %}
-        <td class="pad pad-{{ (existing and existing.type) or default_type or 'empty' }}">
-          <div class="pn">{{ "%02d" % pad_num }}</div>
-          <input type="text" class="src-input" data-pad="{{ pad_num }}"
-                 placeholder="drag from /samples or paste path"
-                 value="{{ existing.source if existing else '' }}">
-          <input type="text" class="type-input" data-pad="{{ pad_num }}"
-                 placeholder="type (kick, snare, …)"
-                 value="{{ (existing and existing.type) or default_type }}">
-          <button type="button" class="clearbtn" data-pad="{{ pad_num }}">clear</button>
+        {% set src_val = existing.source if existing else '' %}
+        {% set type_val = (existing and existing.type) or default_type %}
+        <td class="pad crate-pad pad-{{ type_val or 'empty' }}"
+            data-pad="{{ pad_num }}"
+            data-filled="{{ '1' if src_val else '0' }}">
+          <div class="pad-head">
+            <span class="pn">{{ "%02d" % pad_num }}</span>
+            <select class="type-input" data-pad="{{ pad_num }}">
+              {% for t in ['', 'kick','snare','closed_hh','open_hh','clap','perc','rim','cowbell','low_tom','mid_tom','hi_tom','crash','loop'] %}
+                <option value="{{ t }}" {% if t == type_val %}selected{% endif %}>{{ t or '—' }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="src-display" title="{{ src_val }}">
+            {{ src_val.split('/')[-1] if src_val else '(drop here)' }}
+          </div>
+          <audio class="pad-audio" controls preload="none"
+                 {% if src_val %}src="/audio/sample?path={{ src_val }}"{% endif %}></audio>
+          <div class="pad-actions">
+            <button type="button" class="clearbtn" data-pad="{{ pad_num }}" title="clear pad">×</button>
+          </div>
+          <input type="hidden" class="src-input" data-pad="{{ pad_num }}" value="{{ src_val }}">
         </td>
       {% endfor %}
     </tr>
@@ -42,17 +64,21 @@
   </table>
 
   <input type="hidden" id="pad_json" name="pad_json" value="[]">
-  <button type="submit" id="buildBtn">Build kit</button>
 </form>
 
 {% if samples %}
 <section id="samples-pane">
-  <h2>Samples <small>(drag onto a pad)</small></h2>
-  <p class="hint">Root: <code>{{ samples }}</code></p>
+  <header class="samples-head">
+    <h2>Samples</h2>
+    <span class="hint">drag a file onto a pad — root <code>{{ samples }}</code></span>
+  </header>
   <div id="samples-browser" data-cwd=""></div>
 </section>
 {% else %}
-<p class="hint">Restart with <code>--samples PATH</code> to enable the sample browser.</p>
+<section class="empty">
+  <p>No samples folder configured.
+     <a href="/settings">Set one in Settings</a> to enable the drag-and-drop browser.</p>
+</section>
 {% endif %}
 
 <script src="/static/crate.js"></script>

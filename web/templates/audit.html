@@ -34,7 +34,11 @@
       {% for e in entries %}
       <li>
         <span class="tag tag-{{ e.kind or 'empty' }}">{{ e.kind or '?' }}</span>
-        <a href="/kit/{{ e.kit_dir.replace((root + '/'), '') if root else e.kit_dir }}">{{ e.kit }}</a>
+        {% if e.kit_rel %}
+        <a href="/kit/{{ e.kit_rel }}">{{ e.kit }}</a>
+        {% else %}
+        <span>{{ e.kit }}</span>
+        {% endif %}
         pad {{ "%02d" % e.pad }} — <code>{{ e.filename }}</code>
       </li>
       {% endfor %}

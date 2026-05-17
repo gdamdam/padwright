@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-make_breakbeats.py — Build SP-404 MK2 loop banks from a sample library.
+make_breakbeats.py — Build SP-404MKII loop banks from a sample library.
 
 Scans a source directory recursively, finds audio loop files under 1 MB
 (breakbeats, drum loops, percussion loops), and exports 16-pad banks
-ready to drag-and-drop into the Roland SP-404 MK2 app.
+ready to drag-and-drop into the Roland SP-404MKII app.
 
 Default source : /Volumes/eight/MUSIC_PRODUCTION/SAMPLES/Cymatics/
 Default output : /Volumes/eight/MUSIC_PRODUCTION/SP404MK2_BREAKBEATS/
@@ -56,15 +56,25 @@ from sp404_core import (
 SRC_DIR = Path("/Volumes/eight/MUSIC_PRODUCTION/SAMPLES/Cymatics")
 DST_DIR = Path("/Volumes/eight/MUSIC_PRODUCTION/SP404MK2_BREAKBEATS")
 
-MAX_SIZE = 1 * 1024 * 1024   # 1 MB
+# Loop detection (in order of preference):
+#   1. ffprobe duration ≤ MAX_LOOP_SECONDS — the real signal. A "loop" is
+#      a short repeatable phrase, typically ≤ 4 bars at common tempos
+#      (16s = ~4 bars at 60 BPM = ~8 bars at 120 BPM).
+#   2. If ffprobe isn't available or fails: fall back to MAX_SIZE_FALLBACK
+#      as a crude proxy (the original 1 MB heuristic).
+#   3. HARD_SIZE_CAP is an absolute ceiling so we never probe huge stems.
+MAX_LOOP_SECONDS = 16.0
+MAX_SIZE_FALLBACK = 1 * 1024 * 1024   # 1 MB
+HARD_SIZE_CAP    = 8 * 1024 * 1024    # 8 MB
+MAX_SIZE = MAX_SIZE_FALLBACK          # kept as alias for backward compat
 MAX_PADS = 16
 
 HELP = """\
-make_breakbeats.py — Build SP-404 MK2 loop banks from a sample library.
+make_breakbeats.py — Build SP-404MKII loop banks from a sample library.
 
 Scans a source directory recursively, finds audio loop files under 1 MB
 (breakbeats, drum loops, percussion loops), and exports 16-pad banks
-ready to drag-and-drop into the Roland SP-404 MK2 app.
+ready to drag-and-drop into the Roland SP-404MKII app.
 
 Default source : /Volumes/eight/MUSIC_PRODUCTION/SAMPLES/Cymatics/
 Default output : /Volumes/eight/MUSIC_PRODUCTION/SP404MK2_BREAKBEATS/
@@ -95,24 +105,51 @@ Audio output: 16-bit / 48 kHz / stereo WAV.
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-def is_loop_file(path: Path, src_root: Path) -> bool:
-    """Return True if this audio file qualifies as a loop."""
+def is_loop_file(path: Path, src_root: Path,
+                 max_seconds: float = MAX_LOOP_SECONDS) -> bool:
+    """
+    Decide whether `path` is a loop suitable for an SP-404MKII pad bank.
+
+    Conservative by design — we'd rather skip a real loop than pull in
+    a 4-minute stem. The rules, in order:
+
+      - Must be an audio extension, not hidden, not an Ableton .asd
+      - "loop" must appear in the filename or any ancestor folder name
+        (this stays as a strict requirement to keep the signal clean)
+      - File size must be under HARD_SIZE_CAP (8 MB safety ceiling so
+        we never probe huge stems)
+      - Then, in order of preference:
+          1. ffprobe duration ≤ max_seconds  → accept
+          2. ffprobe failed / unavailable    → fall back to
+             size < MAX_SIZE_FALLBACK
+    """
     if path.suffix.lower() not in AUDIO_EXTS:
         return False
     if path.name.startswith(".") or path.name.endswith(".asd"):
         return False
-    try:
-        if path.stat().st_size >= MAX_SIZE:
-            return False
-    except OSError:
-        return False
-    # "loop" anywhere in the filename or any ancestor folder name
+
     rel = path.relative_to(src_root)
     combined = "/".join(rel.parts).lower()
-    return "loop" in combined
+    if "loop" not in combined:
+        return False
+
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return False
+    if size >= HARD_SIZE_CAP:
+        return False
+
+    info = ffprobe_info(path)
+    dur = info.get("duration_s")
+    if dur is not None:
+        return dur <= max_seconds
+    # ffprobe missing or failed — fall back to the original size heuristic.
+    return size < MAX_SIZE_FALLBACK
 
 
-def collect_banks(src_root: Path) -> list[tuple[str, list[Path]]]:
+def collect_banks(src_root: Path,
+                  max_seconds: float = MAX_LOOP_SECONDS) -> list[tuple[str, list[Path]]]:
     """
     Walk src_root. For each directory, collect qualifying loop files that live
     directly inside it (not in subdirs). Return list of (bank_name, [paths]).
@@ -124,7 +161,7 @@ def collect_banks(src_root: Path) -> list[tuple[str, list[Path]]]:
         folder = Path(dirpath)
         loops = sorted(
             f for name in filenames
-            if is_loop_file(f := folder / name, src_root)
+            if is_loop_file(f := folder / name, src_root, max_seconds=max_seconds)
         )
         if not loops:
             continue
@@ -205,14 +242,20 @@ def main():
 
     args = sys.argv[1:]
 
-    # --src / --dst overrides
+    # --src / --dst / --loop-seconds overrides
     src_dir = SRC_DIR
     dst_dir = DST_DIR
+    max_loop_seconds = MAX_LOOP_SECONDS
     for i, a in enumerate(args):
         if a == "--src" and i + 1 < len(args):
             src_dir = Path(args[i + 1])
         if a == "--dst" and i + 1 < len(args):
             dst_dir = Path(args[i + 1])
+        if a == "--loop-seconds" and i + 1 < len(args):
+            try:
+                max_loop_seconds = float(args[i + 1])
+            except ValueError:
+                print(f"warning: bad --loop-seconds value {args[i+1]!r}", file=sys.stderr)
 
     if status_only:
         show_status(src_dir, dst_dir)
@@ -225,7 +268,7 @@ def main():
         if skip_next:
             skip_next = False
             continue
-        if a in ("--src", "--dst"):
+        if a in ("--src", "--dst", "--loop-seconds"):
             skip_next = True
             continue
         if not a.startswith("--"):
@@ -234,9 +277,10 @@ def main():
     print(f"Source : {src_dir}")
     print(f"Output : {dst_dir}")
     print(f"Mode   : {'DRY RUN' if dry_run else 'BUILD'}")
-    print("Scanning for loop files under 1 MB …\n")
+    print(f"Scanning for loops up to {max_loop_seconds:.0f}s long with "
+          f"'loop' in path (size cap {HARD_SIZE_CAP // (1024 * 1024)} MB)…\n")
 
-    banks = collect_banks(src_dir)
+    banks = collect_banks(src_dir, max_seconds=max_loop_seconds)
 
     if filters:
         banks = [

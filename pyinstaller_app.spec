@@ -18,9 +18,11 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 block_cipher = None
 
 datas = []
-# Bundle the Jinja templates and static assets that web/app.py serves.
-datas += [('web/templates', 'web/templates'),
-          ('web/static',    'web/static')]
+# Bundle Jinja templates + static assets at the bundle ROOT — PyInstaller
+# flattens the entry script's path, so `__file__`'s parent in the bundle
+# is _MEIPASS, not _MEIPASS/web. See _resource_dir() in web/app.py.
+datas += [('web/templates', 'templates'),
+          ('web/static',    'static')]
 
 # uvicorn pulls in dynamic deps; collect them aggressively.
 hiddenimports = []

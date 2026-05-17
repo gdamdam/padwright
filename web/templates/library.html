@@ -14,21 +14,28 @@
      or <a href="/crate">start a new crate</a>.</p>
 </div>
 {% else %}
-<table class="kits">
+<table class="kits sortable" id="kits-table">
   <thead>
-    <tr><th>Kit</th><th>Kind</th><th>Pads</th><th>Path</th><th></th></tr>
+    <tr>
+      <th>Kit</th>
+      <th>Kind</th>
+      <th>Pads</th>
+      <th>Path</th>
+      <th data-nosort></th>
+    </tr>
   </thead>
   <tbody>
   {% for k in kits %}
     <tr>
-      <td><a href="/kit/{{ k.rel }}">{{ k.name }}</a></td>
-      <td><span class="tag tag-{{ k.kind }}">{{ k.kind }}</span></td>
-      <td>{{ k.sourced }}/{{ k.pads }} sourced</td>
-      <td><code>{{ k.rel }}</code></td>
+      <td data-sort="{{ k.name | lower }}"><a href="/kit/{{ k.rel }}">{{ k.name }}</a></td>
+      <td data-sort="{{ k.kind }}"><span class="tag tag-{{ k.kind }}">{{ k.kind }}</span></td>
+      <td data-sort="{{ k.sourced }}">{{ k.sourced }}/{{ k.pads }} sourced</td>
+      <td data-sort="{{ k.rel | lower }}"><code>{{ k.rel }}</code></td>
       <td><a href="/crate?kit_rel={{ k.rel }}" class="btn">edit as crate</a></td>
     </tr>
   {% endfor %}
   </tbody>
 </table>
+<script src="/static/sort.js"></script>
 {% endif %}
 {% endblock %}

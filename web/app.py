@@ -1,20 +1,21 @@
 """
-web/app.py — FastAPI UI for the SP-404 MK2 toolkit.
+web/app.py — Padwright local web UI (FastAPI).
 
-Serves a small local web UI on http://localhost:<port> that lets you:
-  - browse built kits under <root>
-  - inspect a kit's pads with in-browser audio audition
-  - swap any pad with a file from your sample library
-  - edit and build crates (hand-curated kits)
-  - audit duplicates across the tree (uses audit_kits logic)
+Serves http://localhost:<port> with: library browse, kit detail + audition,
+pad swap, crate editor, duplicate audit, samples browser, settings.
 
-Run:
-  python3 -m web.app --root /path/to/built_kits --samples /path/to/samples
-  python3 -m web.app --root ./out --port 0           # auto-pick port
-  python3 -m web.app --root ./out --no-browser       # don't open browser
+Run modes:
+  python3 -m web.app --root PATH --samples PATH      # explicit CLI mode
+  python3 -m web.app                                 # use saved config
+  python3 -m web.app --port 0 --no-browser           # Tauri sidecar mode
 
-When `--port 0` is used the chosen port is printed to stdout as
-`SP404_PORT=<n>` so a parent process (the Tauri shell) can find it.
+Config persists at <platform-specific>/config.json (see _default_data_dir).
+CLI flags always win over config; an in-app /settings page writes config.
+
+When --port 0 is used, the chosen port is printed to stdout from the
+FastAPI lifespan hook (so it's emitted only after uvicorn has bound)
+as `SP404_PORT=<n>`. The Tauri parent reads that line to navigate the
+webview.
 """
 
 from __future__ import annotations
@@ -22,12 +23,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import socket
 import sys
 import tempfile
 import threading
 import time
 import webbrowser
+from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote
 
@@ -50,7 +53,22 @@ from sp404_core import (  # noqa: E402
 import audit_kits  # noqa: E402
 
 
-HERE = Path(__file__).resolve().parent
+def _resource_dir() -> Path:
+    """
+    Where bundled assets live.
+
+    - Source runs (`python -m web.app`): next to this file → web/.
+    - PyInstaller bundle: under sys._MEIPASS at the bundle root (the
+      spec puts templates/ and static/ there directly, since PyInstaller
+      flattens the entry script's path).
+    """
+    bundle = getattr(sys, "_MEIPASS", None)
+    if bundle:
+        return Path(bundle)
+    return Path(__file__).resolve().parent
+
+
+HERE = _resource_dir()
 TEMPLATES = Jinja2Templates(directory=str(HERE / "templates"))
 
 
@@ -60,17 +78,86 @@ class State:
     root: Path                 # directory of built kits
     samples: Path | None       # sample-library root for crate sourcing
     crates_dir: Path           # where saved crates live
+    port: int                  # set in main() before uvicorn.run()
 
     def __init__(self):
         self.root = Path(".")
         self.samples = None
         self.crates_dir = Path(".")
+        self.port = 0
 
 
 STATE = State()
 
 
+# ── Config persistence ────────────────────────────────────────────────────────
+
+CONFIG_VERSION = 1
+# Keep the legacy identifier so the macOS data dir doesn't move on rebrand.
+# Visible product name is Padwright; data-on-disk continuity matters more.
+APP_ID = "com.sp404mk2.toolkit"
+
+
+def _default_data_dir() -> Path:
+    """Per-user app data dir, platform-aware."""
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / APP_ID
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA") or str(Path.home())
+        return Path(base) / "Padwright"
+    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    return Path(base) / "padwright"
+
+
+def config_path() -> Path:
+    return _default_data_dir() / "config.json"
+
+
+def load_config() -> dict:
+    p = config_path()
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def save_config(config: dict) -> Path:
+    config = {**config, "version": CONFIG_VERSION}
+    p = config_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(config, indent=2))
+    return p
+
+
+def _bin_status(bin_name: str, env_var: str) -> dict:
+    """Diagnostic for ffmpeg/ffprobe availability."""
+    env_path = os.environ.get(env_var)
+    resolved = env_path or shutil.which(bin_name)
+    return {
+        "name": bin_name,
+        "env_var": env_var,
+        "from_env": bool(env_path),
+        "path": resolved,
+        "ok": bool(resolved and Path(resolved).exists()),
+    }
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _source_is_allowed(src: Path) -> bool:
+    """
+    When STATE.samples is configured (always the case in the desktop app),
+    swap/crate sources must live under it. CLI users running without
+    --samples retain full flexibility.
+    """
+    if STATE.samples is None:
+        return True
+    samples_root = STATE.samples.resolve()
+    src = src.resolve()
+    return src == samples_root or samples_root in src.parents
+
 
 def safe_join(root: Path, sub: str) -> Path:
     """Resolve <root>/<sub> and verify the result is still under root."""
@@ -140,7 +227,17 @@ def pick_free_port() -> int:
 
 # ── App ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="SP-404 MK2 Toolkit")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # Lifespan startup runs AFTER uvicorn binds the socket — so this is the
+    # safe moment to announce the port to the Tauri parent. Printing earlier
+    # (before uvicorn.run) creates a race where the parent's first proxied
+    # request lands before uvicorn is listening, yielding "Connection refused".
+    print(f"SP404_PORT={STATE.port}", flush=True)
+    yield
+
+
+app = FastAPI(title="Padwright", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
 
 
@@ -207,6 +304,11 @@ def kit_swap(kit_rel: str, pad: int = Form(...), source: str = Form(...),
     src_path = Path(source).resolve()
     if not src_path.is_file():
         raise HTTPException(status_code=400, detail=f"source not found: {source}")
+    if not _source_is_allowed(src_path):
+        raise HTTPException(
+            status_code=400,
+            detail=f"source must be under the configured samples root ({STATE.samples})",
+        )
 
     ch = 2 if meta.get("kind") == KIND_LOOPBANK else 1
     dst = kit_dir / entry["filename"]
@@ -256,6 +358,22 @@ def audit_view(request: Request, exclude_super: bool = True, by_source: bool = F
         groups = {k: [e for e in v if e.get("kind") != "super"]
                   for k, v in groups.items()}
         groups = {k: v for k, v in groups.items() if v}
+
+    # Annotate each entry with a kit_rel link the template can use directly.
+    # Without this, templates would have to compute it from kit_dir which is
+    # absolute — see the fixed audit.html.
+    root_str = str(STATE.root.resolve())
+    for entries in groups.values():
+        for e in entries:
+            kd = e.get("kit_dir")
+            if not kd:
+                e["kit_rel"] = None
+                continue
+            try:
+                e["kit_rel"] = str(Path(kd).resolve().relative_to(root_str))
+            except ValueError:
+                e["kit_rel"] = None
+
     total_pads = sum(len(v) for v in groups.values())
     dups = sorted(
         [(k, v) for k, v in groups.items() if len(v) >= 2],
@@ -300,21 +418,35 @@ def crate_build(name: str = Form(...), kind: str = Form(KIND_DRUMKIT),
     if not isinstance(pad_specs, list):
         raise HTTPException(status_code=400, detail="pad_json must be a list")
 
-    # Drop pads where source is missing or doesn't exist
+    # Validate + clean: drop sources that don't exist OR escape the samples
+    # root. Each is reported back as a warning in the manifest meta so the
+    # user can see what was silently dropped.
     cleaned = []
+    warnings: list[str] = []
     for p in pad_specs:
         if not p.get("pad"):
             continue
-        src = p.get("source") or None
-        if src and not Path(src).exists():
-            src = None
+        src_raw = p.get("source") or None
+        src: str | None = src_raw
+        if src:
+            src_path = Path(src).resolve()
+            if not src_path.is_file():
+                warnings.append(f"pad {p['pad']}: source not found, set to silent ({src})")
+                src = None
+            elif not _source_is_allowed(src_path):
+                warnings.append(f"pad {p['pad']}: source outside samples root, set to silent ({src})")
+                src = None
+            else:
+                src = str(src_path)
         cleaned.append({"pad": int(p["pad"]),
                         "source": src,
                         "type": p.get("type") or None})
 
     dst = STATE.root / name
-    build_from_pad_list(dst, cleaned, kind=kind,
-                        meta_extra={"source": "web_ui"})
+    meta_extra = {"source": "web_ui"}
+    if warnings:
+        meta_extra["warnings"] = warnings
+    build_from_pad_list(dst, cleaned, kind=kind, meta_extra=meta_extra)
 
     # Also save the crate JSON next to the bank for re-editing later.
     crate_out = {"name": name, "kind": kind, "pads":
@@ -327,8 +459,59 @@ def crate_build(name: str = Form(...), kind: str = Form(KIND_DRUMKIT),
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "root": str(STATE.root),
-            "samples": str(STATE.samples) if STATE.samples else None}
+    return {
+        "status": "ok",
+        "root": str(STATE.root),
+        "samples": str(STATE.samples) if STATE.samples else None,
+        "ffmpeg": _bin_status("ffmpeg", "FFMPEG_PATH"),
+        "ffprobe": _bin_status("ffprobe", "FFPROBE_PATH"),
+        "port": STATE.port,
+        "config_path": str(config_path()),
+    }
+
+
+@app.get("/settings", response_class=HTMLResponse)
+def settings_view(request: Request):
+    return TEMPLATES.TemplateResponse(request, "settings.html", {
+        "root": str(STATE.root) if STATE.root else "",
+        "samples": str(STATE.samples) if STATE.samples else "",
+        "config_path": str(config_path()),
+        "config_exists": config_path().exists(),
+        "ffmpeg": _bin_status("ffmpeg", "FFMPEG_PATH"),
+        "ffprobe": _bin_status("ffprobe", "FFPROBE_PATH"),
+        "platform": sys.platform,
+        "port": STATE.port,
+        "saved": request.query_params.get("saved") == "1",
+    })
+
+
+@app.post("/settings")
+def settings_save(root: str = Form(""), samples: str = Form("")):
+    cfg = load_config()
+    root = root.strip()
+    samples = samples.strip()
+
+    if root:
+        root_path = Path(root).expanduser().resolve()
+        root_path.mkdir(parents=True, exist_ok=True)
+        cfg["root"] = str(root_path)
+        STATE.root = root_path
+        # Re-anchor crates dir under the new root
+        STATE.crates_dir = (root_path / ".crates").resolve()
+        STATE.crates_dir.mkdir(parents=True, exist_ok=True)
+    if samples:
+        samples_path = Path(samples).expanduser().resolve()
+        if not samples_path.exists():
+            raise HTTPException(status_code=400,
+                                detail=f"samples path does not exist: {samples_path}")
+        cfg["samples"] = str(samples_path)
+        STATE.samples = samples_path
+    else:
+        cfg.pop("samples", None)
+        STATE.samples = None
+
+    save_config(cfg)
+    return RedirectResponse(url="/settings?saved=1", status_code=303)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -349,10 +532,10 @@ def open_browser_when_ready(port: int, host: str = "127.0.0.1") -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--root", type=Path, required=True,
-                        help="directory of built kits (where manifest.json files live)")
+    parser.add_argument("--root", type=Path, default=None,
+                        help="directory of built kits (default: saved config, then platform data dir)")
     parser.add_argument("--samples", type=Path, default=None,
-                        help="optional sample-library root for crate sourcing")
+                        help="optional sample-library root for crate sourcing (default: saved config)")
     parser.add_argument("--crates", type=Path, default=None,
                         help="where to save user crates (defaults to <root>/.crates)")
     parser.add_argument("--host", default="127.0.0.1")
@@ -362,17 +545,36 @@ def main() -> None:
                         help="don't open the system browser")
     args = parser.parse_args()
 
-    STATE.root = args.root.resolve()
-    STATE.samples = args.samples.resolve() if args.samples else None
+    # Resolution order: CLI > saved config > platform default.
+    cfg = load_config()
+
+    if args.root:
+        STATE.root = args.root.resolve()
+    elif cfg.get("root"):
+        STATE.root = Path(cfg["root"]).resolve()
+    else:
+        STATE.root = (_default_data_dir() / "kits").resolve()
+    STATE.root.mkdir(parents=True, exist_ok=True)
+
+    if args.samples:
+        STATE.samples = args.samples.resolve()
+    elif cfg.get("samples"):
+        STATE.samples = Path(cfg["samples"]).resolve()
+    else:
+        STATE.samples = None
+
     STATE.crates_dir = (args.crates or (STATE.root / ".crates")).resolve()
     STATE.crates_dir.mkdir(parents=True, exist_ok=True)
 
-    if not STATE.root.exists():
-        print(f"warning: --root {STATE.root} does not exist", file=sys.stderr)
+    print(f"[padwright] config: {config_path()}", file=sys.stderr)
+    print(f"[padwright] root:    {STATE.root}", file=sys.stderr)
+    print(f"[padwright] samples: {STATE.samples or '(unset — set via /settings)'}",
+          file=sys.stderr)
 
     port = args.port or pick_free_port()
-    # The Tauri shell parses this line from stdout to find the URL:
-    print(f"SP404_PORT={port}", flush=True)
+    STATE.port = port
+    # Note: SP404_PORT is printed from the lifespan hook above, *after*
+    # uvicorn has actually bound the socket. Printing here would race.
 
     if not args.no_browser:
         threading.Thread(target=open_browser_when_ready,

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-audit_kits.py — Find duplicate pads across an SP-404 MK2 export tree.
+audit_kits.py — Find duplicate pads across an SP-404MKII export tree.
 
 Walks a destination directory, reads every `manifest.json` it finds, and
 groups pad entries by their `sha256` field. Anything that appears in more

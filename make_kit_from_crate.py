@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-make_kit_from_crate.py — Build an SP-404 MK2 bank from a hand-curated crate.
+make_kit_from_crate.py — Build an SP-404MKII bank from a hand-curated crate.
 
 A crate is a small JSON file describing intent:
 

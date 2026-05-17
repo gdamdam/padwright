@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Reorder SP-404 MK2 kit files so drag-and-drop lands correctly.
+Reorder SP-404MKII kit files so drag-and-drop lands correctly.
 
 The Roland app fills pads top-left → right → down (pad 13 first, pad 1 last).
 We rename files so kick/snare/hats end up on the BOTTOM ROW (pads 1-4),
@@ -110,9 +110,9 @@ def find_kit_dirs(base):
 
 
 HELP = """\
-reorder_kits.py — Reorder SP-404 MK2 kit files for correct drag-and-drop placement.
+reorder_kits.py — Reorder SP-404MKII kit files for correct drag-and-drop placement.
 
-The Roland SP-404 MK2 app fills pads top-left → right → down (pad 13 first,
+The Roland SP-404MKII app fills pads top-left → right → down (pad 13 first,
 pad 1 last). This script renames files so kick/snare/hats land on the BOTTOM
 ROW (pads 1-4) and adds 4 silent WAV placeholders for the TOP ROW (pads 13-16).
 

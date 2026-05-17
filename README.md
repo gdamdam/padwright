@@ -1,9 +1,10 @@
-# SP404MK2 Sample Kit Tools
+# Padwright — SP-404MKII Bank Builder
 
-A small Python toolkit for turning sample folders into SP-404MKII-friendly
-banks. Not a sample browser, not a Sononym replacement — this is the
-**last-mile exporter** that lives between "huge sample library" and "16
-playable pads on the SP".
+**v1.0.0** · A toolkit for turning sample folders into SP-404MKII-friendly
+banks. Ships as a desktop app (Tauri) wrapping a small Python+FastAPI web
+UI, plus standalone CLI tools. Not a sample browser, not a Sononym
+replacement — this is the **last-mile exporter** that lives between
+"huge sample library" and "16 playable pads on the SP".
 
 The workflow it covers:
 
@@ -12,15 +13,25 @@ scan → classify → export → manifest → audit → swap/curate → drag-and
 ```
 
 Discovery and crate-digging live in other tools (Sononym, XO, COSMOS,
-Finder). This one makes sure that whatever you point it at ends up as a
+Finder). Padwright makes sure that whatever you point it at ends up as a
 predictable, inspectable, re-curatable 16-pad bank.
+
+## Three ways to use it
+
+1. **Desktop app** (`.app` / `.dmg` / `.msi`). Double-click, set folders
+   in Settings, drag samples onto pads. See `md/BUILD.md` to build.
+2. **Local web UI** — `pip install -r requirements.txt && python -m web.app`.
+   Same UI, no install, runs in your default browser at `localhost:<port>`.
+3. **CLI tools** — `make_kits.py`, `make_breakbeats.py`, `swap_pad.py`,
+   `rebuild_kit.py`, `make_kit_from_crate.py`, `audit_kits.py`,
+   `reorder_kits.py`. Scriptable, batch-friendly, no GUI deps.
 
 ## Requirements
 
 - Python 3.11+ (uses `X | Y` type hints)
 - `ffmpeg` and `ffprobe` on `PATH`
 - A source folder of `.zip` packs, unzipped pack folders, or loose audio
-- The Roland SP-404 MK2 app for final drag-and-drop
+- The Roland SP-404MKII app for final drag-and-drop
 
 Output WAV formats:
 
@@ -108,19 +119,21 @@ python3 make_breakbeats.py --help
 python3 make_breakbeats.py --dry-run
 python3 make_breakbeats.py --status
 python3 make_breakbeats.py --src /path/to/loops --dst /path/to/output
+python3 make_breakbeats.py --loop-seconds 12 --src /path/to/loops --dst ...
 ```
 
-Loop detection rules:
+Loop detection rules, in order:
 
 - `.wav` / `.aif` / `.aiff`, not hidden, not Ableton `.asd`
-- File size < 1 MB
 - `loop` appears in the filename or any parent folder name
+- File size under the 8 MB safety cap (never probe huge stems)
+- **ffprobe duration ≤ `--loop-seconds`** (default 16s — covers up to
+  4 bars at 60 BPM / 8 bars at 120 BPM). This is the real signal.
+- If ffprobe isn't available, falls back to the legacy "size < 1 MB"
+  heuristic.
 
 Each leaf folder with qualifying loops becomes one bank, sampled evenly
 to 16 files. Writes manifest + pad map per bank.
-
-The 1 MB rule is crude — some real loops are larger, some small files
-aren't actually loops. This is the next obvious tightening.
 
 ### `reorder_kits.py` — legacy renamer
 
@@ -193,7 +206,7 @@ build. See **Crates** below for the format.
 The same web UI can be packaged as a double-clickable desktop app
 (`.dmg` on macOS, `.msi` on Windows, `.AppImage`/`.deb` on Linux)
 that bundles the Python runtime and ffmpeg inside. End users don't
-need Python, pip, or a terminal. See `BUILD.md` for the full build
+need Python, pip, or a terminal. See `md/BUILD.md` for the full build
 recipe. Scaffold lives in `src-tauri/`.
 
 ### `web/app.py` — local browser UI (FastAPI)
@@ -206,15 +219,26 @@ drag-and-drop from a sample browser, view the duplicate audit.
 ```bash
 pip install -r requirements.txt
 python3 -m web.app --root /path/to/built_kits --samples /path/to/samples
-python3 -m web.app --root ./out --port 0 --no-browser   # auto-pick port
+python3 -m web.app                                       # use saved config
+python3 -m web.app --port 0 --no-browser                 # Tauri sidecar mode
 ```
 
-Routes: `/` (library), `/kit/<rel>` (kit detail), `/audit`,
-`/crate`, `/samples`. POST endpoints for `/kit/<rel>/swap` and
-`/crate/build`. Audio is served from `/audio/kit/...` and
-`/audio/sample?path=...`. Honors `FFMPEG_PATH` / `FFPROBE_PATH` env
-vars so the bundled-app build (see `BUILD.md`) can ship its own
-ffmpeg binary.
+Routes: `/` (library), `/kit/<rel>` (kit detail), `/audit`, `/crate`,
+`/samples`, `/settings`. POST: `/kit/<rel>/swap`, `/crate/build`,
+`/settings`. Audio: `/audio/kit/...` and `/audio/sample?path=...`.
+
+Config persistence: `--root` / `--samples` flags win over a saved
+`config.json` (per-user, in the platform data dir). The Settings page
+writes the config so the desktop app remembers your folders across
+launches.
+
+Path safety: when a samples root is configured, pad swaps and crate
+builds reject sources outside it (a warning is recorded in the
+manifest for dropped pads). CLI users without `--samples` retain full
+flexibility.
+
+Honors `FFMPEG_PATH` / `FFPROBE_PATH` env vars so the bundled-app build
+(see `md/BUILD.md`) can ship its own ffmpeg binaries.
 
 ### `audit_kits.py` — find duplicate pads across a built tree
 
@@ -372,7 +396,7 @@ python3 swap_pad.py \
   13 \
   /path/to/better_kick.wav
 
-# 5. Drag the 16 WAV files into the Roland SP-404 MK2 app
+# 5. Drag the 16 WAV files into the Roland SP-404MKII app
 ```
 
 For hand-curated kits, skip steps 1–4 and write a crate directly:
@@ -383,32 +407,28 @@ python3 make_kit_from_crate.py my.crate.json /Volumes/eight/SP_EXPORT
 
 ## What's still rough
 
-- **Classifier is filename-only.** Numeric-only packs and weirdly-named
-  packs still get the "spread evenly across 12 slots" fallback. Real
-  audio-feature classification (spectral kick/snare detection) is a
-  large undertaking and would only help a minority of packs. Defer.
-- **`make_breakbeats.py` loop heuristic is crude** (size + "loop" in the
-  path). BPM/bar-length detection via ffprobe + simple onset analysis
-  would be a real win, but isn't done.
+- **Classifier is filename-only.** Numeric-only packs (CR78, Linndrum,
+  EMU Drumulator-style "01.wav … 14.wav") still get the "spread evenly
+  across 12 slots" fallback. Real audio-feature classification (spectral
+  kick/snare detection) is a large undertaking and would only help a
+  minority of packs. The crate workflow is the answer for these packs.
+- **BPM detection for loop banks isn't done yet.** The new duration
+  heuristic catches "is this a loop" but doesn't compute tempo. ffprobe
+  duration + filename pattern matching would be the next step.
 - **No SD-card writer.** A `copy-to-import` command would just be a
   `cp -R`; not worth a script until you find yourself doing it daily.
-- **No `config.toml`.** CLI flags + a shell alias do the same job today.
-  Add it only when you have ≥ 3 settings that would actually live there.
-- **`make_kits.build_kit` and `build_from_pad_list` are parallel.** Both
-  work; the batch path wasn't migrated to the new exporter to avoid
-  regressing what already runs. Could be unified later.
+- **Auto-update for the desktop app isn't wired up** (Tauri supports it
+  via the updater plugin; defer until there's a v1.1).
 
 ## Direction
 
 Keep this repo focused on the last-mile pipeline:
 
 ```text
-big sample library → discovery (external) → this tool → SP-ready banks → SP-404 MK2
+big sample library → discovery (external) → Padwright → SP-ready banks → SP-404MKII
 ```
 
-The current scripts cover `scan / classify / export / manifest / swap /
-crate`. The audition step is partially covered by `pad-map.html`. The
-remaining gap is a real "choose pads" UX — a local browser app with
-drag-and-drop pad assignment. Not built yet; not worth building until
-the crate workflow shows you what fields a UI would actually need to
-expose.
+Padwright covers `scan / classify / export / manifest / audition / swap /
+crate / audit`. Discovery (which file is the right kick?) lives elsewhere.
+The desktop app's job is to make the last-mile prep fast enough that you
+don't dread it.
