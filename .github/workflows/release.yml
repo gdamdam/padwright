@@ -18,14 +18,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # NOTE: macOS arm64 (aarch64-apple-darwin) is intentionally NOT in
-          # the matrix for v1.0.x — there is no reliable static LGPL arm64
-          # ffmpeg/ffprobe source we trust for CI. Apple Silicon users run
-          # the Intel build via Rosetta (auto-installed by macOS on first
-          # arm64-Mac launch of an Intel binary). Revisit for a later release.
-          - platform: macos-13             # x86_64 Intel runner
-            target: x86_64-apple-darwin
-            label: macos-x64
+          # macOS leg: arm64 (Apple Silicon) native. The Padwright app
+          # itself is arm64 native (Tauri shell + PyInstaller sidecar
+          # from arm64 host). The bundled ffmpeg/ffprobe sidecars are
+          # Intel statics from evermeet — macOS runs them transparently
+          # via Rosetta (auto-prompted on first invocation). Intel Macs
+          # are NOT covered in v1.0.x; macos-13 runners are queue-
+          # starved on GitHub-hosted infra.
+          - platform: macos-latest         # arm64 (Apple Silicon)
+            target: aarch64-apple-darwin
+            label: macos-arm64
           - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             label: linux-x64

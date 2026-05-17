@@ -8,14 +8,17 @@
  * Used by .github/workflows/release.yml.
  *
  * Sources (per platform):
- *   Linux x86_64 / arm64    BtbN/FFmpeg-Builds (tar.xz, LGPL)
- *   Windows x86_64          BtbN/FFmpeg-Builds (zip, LGPL)
- *   macOS x86_64 (Intel)    evermeet.cx static builds
+ *   Linux x86_64 / arm64       BtbN/FFmpeg-Builds (tar.xz, LGPL)
+ *   Windows x86_64             BtbN/FFmpeg-Builds (zip, LGPL)
+ *   macOS x86_64 + arm64       evermeet.cx Intel static builds
  *
  * NOTE: BtbN does not publish macOS binaries — only Linux + Windows.
- * macOS arm64 is NOT supported here for v1.0.x; Apple Silicon users run
- * the Intel build via Rosetta. See .github/workflows/release.yml matrix
- * comment for rationale.
+ * For BOTH macOS targets we fetch the Intel static from evermeet:
+ *   - x86_64-apple-darwin: native; runs directly.
+ *   - aarch64-apple-darwin: bundled as-is; macOS runs the Intel
+ *     binary via Rosetta when the arm64 Padwright app spawns it.
+ *     (Rosetta is auto-prompted on first invocation.) No reliable
+ *     static LGPL arm64 ffmpeg source exists for CI use yet.
  *
  * Usage:
  *   node scripts/ci_download_ffmpeg.mjs --target <target-triple>
@@ -136,9 +139,14 @@ async function fetchForTarget(workDir) {
     return { ffmpegBin: findBin(into, 'ffmpeg'), ffprobeBin: findBin(into, 'ffprobe') };
   }
 
-  // ─── evermeet.cx: macOS Intel ─────────────────────────────────────────────
-  if (target === 'x86_64-apple-darwin') {
-    console.log('source:  evermeet.cx (macOS Intel)');
+  // ─── evermeet.cx: both macOS targets ──────────────────────────────────────
+  // Intel binary is shipped for both — runs natively on Intel Macs and
+  // under Rosetta on Apple Silicon. See header comment for rationale.
+  if (target === 'x86_64-apple-darwin' || target === 'aarch64-apple-darwin') {
+    const note = target === 'aarch64-apple-darwin'
+      ? ' (Intel binary; Rosetta translates on arm64 Macs)'
+      : '';
+    console.log(`source:  evermeet.cx${note}`);
     const out = {};
     for (const bin of ['ffmpeg', 'ffprobe']) {
       const url = `${EVERMEET}/getrelease/${bin}/zip`;
@@ -154,13 +162,6 @@ async function fetchForTarget(workDir) {
       out[`${bin}Bin`] = found;
     }
     return out;
-  }
-
-  if (target === 'aarch64-apple-darwin') {
-    console.error('error: aarch64-apple-darwin is not supported by this '
-                + 'script. Apple Silicon users run the Intel build via '
-                + 'Rosetta. See release.yml matrix comment.');
-    process.exit(2);
   }
 
   console.error(`error: unsupported target ${target}`);
