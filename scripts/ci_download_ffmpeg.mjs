@@ -27,8 +27,8 @@
  */
 
 import { execSync } from 'node:child_process';
-import { chmodSync, createWriteStream, mkdirSync,
-         readdirSync, renameSync, rmSync, statSync } from 'node:fs';
+import { chmodSync, copyFileSync, createWriteStream, mkdirSync,
+         readdirSync, renameSync, rmSync, statSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import https from 'node:https';
@@ -183,8 +183,20 @@ const ext = isWindows ? '.exe' : '';
 const ffmpegDst  = path.join(DST_DIR, `ffmpeg-${target}${ext}`);
 const ffprobeDst = path.join(DST_DIR, `ffprobe-${target}${ext}`);
 
-renameSync(ffmpegBin,  ffmpegDst);
-renameSync(ffprobeBin, ffprobeDst);
+// Use copy+unlink instead of rename — on Windows CI the workspace (D:)
+// and tmpdir (C:) live on different drives, and renameSync throws
+// EXDEV across filesystems.
+function moveAcrossFs(src, dst) {
+  try {
+    renameSync(src, dst);
+  } catch (e) {
+    if (e.code !== 'EXDEV') throw e;
+    copyFileSync(src, dst);
+    try { unlinkSync(src); } catch { /* best-effort cleanup */ }
+  }
+}
+moveAcrossFs(ffmpegBin,  ffmpegDst);
+moveAcrossFs(ffprobeBin, ffprobeDst);
 if (!isWindows) {
   chmodSync(ffmpegDst,  0o755);
   chmodSync(ffprobeDst, 0o755);
