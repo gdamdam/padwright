@@ -6,8 +6,8 @@ Scans a source directory recursively, finds audio loop files under 1 MB
 (breakbeats, drum loops, percussion loops), and exports 16-pad banks
 ready to drag-and-drop into the Roland SP-404MKII app.
 
-Default source : /Volumes/eight/MUSIC_PRODUCTION/SAMPLES/Cymatics/
-Default output : /Volumes/eight/MUSIC_PRODUCTION/SP404MK2_BREAKBEATS/
+Default source : ~/Music/Samples/
+Default output : ~/Music/SP_LOOPS/
 
 What counts as a loop:
   - Audio file (.wav / .aif / .aiff), not hidden, not an Ableton .asd sidecar
@@ -53,8 +53,8 @@ from sp404_core import (
 )
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
-SRC_DIR = Path("/Volumes/eight/MUSIC_PRODUCTION/SAMPLES/Cymatics")
-DST_DIR = Path("/Volumes/eight/MUSIC_PRODUCTION/SP404MK2_BREAKBEATS")
+SRC_DIR = Path.home() / "Music" / "Samples"
+DST_DIR = Path.home() / "Music" / "SP_LOOPS"
 
 # Loop detection (in order of preference):
 #   1. ffprobe duration ≤ MAX_LOOP_SECONDS — the real signal. A "loop" is
@@ -76,8 +76,8 @@ Scans a source directory recursively, finds audio loop files under 1 MB
 (breakbeats, drum loops, percussion loops), and exports 16-pad banks
 ready to drag-and-drop into the Roland SP-404MKII app.
 
-Default source : /Volumes/eight/MUSIC_PRODUCTION/SAMPLES/Cymatics/
-Default output : /Volumes/eight/MUSIC_PRODUCTION/SP404MK2_BREAKBEATS/
+Default source : ~/Music/Samples/
+Default output : ~/Music/SP_LOOPS/
 
 What counts as a loop:
   - Audio file (.wav / .aif / .aiff), not hidden, not an Ableton .asd sidecar

@@ -379,7 +379,7 @@ files by drum type, picks one representative per slot, exports a 16-pad
 kit per pack, and writes per-kit manifests + pad maps.
 
 ```bash
-cd /Users/gio/dev/music/sp404mk2
+cd ~/padwright
 
 python3 make_kits.py --help
 python3 make_kits.py --status
@@ -393,8 +393,8 @@ Custom source / destination:
 ```bash
 python3 make_kits.py \
   --unzipped \
-  --src /Users/gio/dev/music/SAMPLES \
-  --dst /Users/gio/dev/music/SP404MK2_EXPORT
+  --src ~/Music/Samples \
+  --dst ~/Music/SP_EXPORT
 ```
 
 Filter to packs matching a word:
@@ -550,10 +550,10 @@ file. Super-bank entries are duplicates of drumkit pads by design — pass
 `--exclude-super` to filter them out.
 
 ```bash
-python3 audit_kits.py /Volumes/eight/SP_EXPORT
-python3 audit_kits.py /Volumes/eight/SP_EXPORT --exclude-super
-python3 audit_kits.py /Volumes/eight/SP_EXPORT --by-source   # group by source path
-python3 audit_kits.py /Volumes/eight/SP_EXPORT --json        # machine-readable
+python3 audit_kits.py ~/Music/SP_EXPORT
+python3 audit_kits.py ~/Music/SP_EXPORT --exclude-super
+python3 audit_kits.py ~/Music/SP_EXPORT --by-source   # group by source path
+python3 audit_kits.py ~/Music/SP_EXPORT --json        # machine-readable
 ```
 
 ### `sp404_core.py` — shared library
@@ -607,7 +607,7 @@ Roland TR-808/
       "pad": 13,
       "filename": "13_kick.wav",
       "type": "kick",
-      "source": "/Volumes/eight/ff/Roland TR-808.zip/BD0000.WAV",
+      "source": "~/Samples/Roland TR-808.zip#BD0000.WAV",
       "source_basename": "BD0000.WAV",
       "kind": "auto",
       "sha256": "…",
@@ -668,7 +668,7 @@ python3 make_kit_from_crate.py --from-kit drumkit/Roland_TR-808 \
 #   - delete pads you don't want (they'll go silent)
 
 # Build the curated kit
-python3 make_kit_from_crate.py 808.crate.json /Volumes/eight/SP_EXPORT
+python3 make_kit_from_crate.py 808.crate.json ~/Music/SP_EXPORT
 ```
 
 Crates are checkable into git — they're the record of a curated kit

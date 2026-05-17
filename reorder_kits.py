@@ -17,10 +17,11 @@ import argparse
 import os
 import shutil
 import tempfile
+from pathlib import Path
 
 from sp404_core import make_silent_wav
 
-DEFAULT_KITS_DIR = "/Volumes/eight/MUSIC_PRODUCTION/SAMPLES_SP404MK2"
+DEFAULT_KITS_DIR = str(Path.home() / "Music" / "SP_EXPORT")
 SILENT_WAV = os.path.join(tempfile.gettempdir(), "sp404_empty.wav")
 
 # Old prefix → New prefix  (for files named NN_name.wav)
@@ -119,7 +120,7 @@ ROW (pads 1-4) and adds 4 silent WAV placeholders for the TOP ROW (pads 13-16).
 Use this on kits that were NOT built by make_kits.py (which already applies this
 layout). Kits that already have 01_empty.wav are skipped automatically.
 
-Default input : /Volumes/eight/MUSIC_PRODUCTION/SAMPLES_SP404MK2/
+Default input : ~/Music/SP_EXPORT/
 
 Remapping applied (file number = pad number after rename):
   01_kick.wav      → 13_kick.wav      (pad 13, bottom-left)

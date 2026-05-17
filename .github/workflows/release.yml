@@ -101,6 +101,26 @@ jobs:
       - name: Install npm deps
         run: npm install
 
+      # ── Compose release notes from CHANGELOG + template ─────────────────
+      # CHANGELOG.md is the source of truth for "what changed in this
+      # version"; .github/RELEASE_NOTES_TEMPLATE.md wraps it with the
+      # install instructions and first-launch warning copy.
+      - name: Compose release notes
+        id: notes
+        shell: bash
+        run: |
+          set -e
+          node scripts/compose_release_notes.mjs \
+            --version "${{ github.ref_name }}" \
+            --repo    "${{ github.repository }}" \
+            > RELEASE_NOTES.md
+          # Multiline output via $GITHUB_OUTPUT heredoc
+          {
+            echo "body<<RELNOTES_EOF"
+            cat RELEASE_NOTES.md
+            echo "RELNOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       # ── Build the bundle and upload to a GitHub Release ─────────────────
       - name: Build Tauri bundle + create/update draft release
         uses: tauri-apps/tauri-action@v0
@@ -112,31 +132,7 @@ jobs:
           releaseDraft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           args: --target ${{ matrix.target }}
-          releaseBody: |
-            ## Padwright ${{ github.ref_name }}
-
-            Pre-built desktop apps for macOS (arm64 + x64), Windows, and Linux.
-
-            ### Install
-
-            - **macOS**: download the `.dmg`, drag Padwright to Applications.
-              First launch: right-click the app → Open → confirm (the build is
-              unsigned; Gatekeeper warns until we add code signing).
-            - **Windows**: run the `.msi`. SmartScreen may warn — click
-              "More info" → "Run anyway" (unsigned build).
-            - **Linux**: run the `.AppImage` or install the `.deb`.
-
-            ### First-launch setup
-
-            Click **Settings** in the app and point Padwright at:
-            - your **built kits folder** (anywhere you want Padwright to write banks)
-            - your **samples library folder** (where your raw samples live)
-
-            Then **New crate** → drag samples onto pads → **Build kit**.
-            Drag the resulting 16 WAVs into the Roland SP-404MKII app.
-
-            See the [README](https://github.com/${{ github.repository }}#readme)
-            for the full workflow.
+          releaseBody: ${{ steps.notes.outputs.body }}
 
       # ── Surface artifacts in the Actions log too (useful when debugging) ─
       - name: Upload bundle as workflow artifact

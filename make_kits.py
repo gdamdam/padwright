@@ -2,8 +2,8 @@
 """
 make_kits_ff.py — Build SP-404MKII drum kits from the ff archive.
 
-Source : /Volumes/eight/ff/*.zip   (470 drum machine sample packs)
-Output : /Volumes/eight/MUSIC_PRODUCTION/SP404MK2_DRUMKITS/
+Source : ~/Music/Samples/*.zip   (drum machine sample packs)
+Output : ~/Music/SP_EXPORT/
   drumkit/  — one curated 16-pad kit per machine (all 470 zips)
   blocks/   — per-type 16-pad banks for monster kits (≥100 audio files)
   super/    — cross-machine "best-of" themed banks (kicks, snares, hats…)
@@ -59,8 +59,8 @@ from sp404_core import (
 )
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
-SRC_DIR    = Path("/Volumes/eight/ff")
-DST_DIR    = Path("/Volumes/eight/MUSIC_PRODUCTION/SP404MK2_DRUMKITS")
+SRC_DIR    = Path.home() / "Music" / "Samples"
+DST_DIR    = Path.home() / "Music" / "SP_EXPORT"
 SILENT_WAV = os.path.join(_TMP, "sp404mk2_ff_empty.wav")
 
 TIER_BLOCK = 100  # ≥ this many audio files → also build category blocks
@@ -380,8 +380,8 @@ representative per slot, and exports a drag-and-drop-ready 16-pad kit for
 each machine. Also builds per-category blocks for large packs and cross-
 machine super banks after all kits are done.
 
-Default source : /Volumes/eight/ff/
-Default output : /Volumes/eight/MUSIC_PRODUCTION/SP404MK2_DRUMKITS/
+Default source : ~/Music/Samples/
+Default output : ~/Music/SP_EXPORT/
 
 Pad layout (file number = pad number, top-left to bottom-right):
   01-04  silent  → pads 1-4   (top row, empty)
