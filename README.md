@@ -23,6 +23,7 @@ predictable, inspectable, re-curatable 16-pad bank.
 - [Using Padwright](#using-padwright)
 - [Pad layout](#pad-layout)
 - [Building the desktop app](#building-the-desktop-app)
+- [Releasing (CI)](#releasing-ci)
 - [Scripts](#scripts)
 - [Manifests & pad maps](#manifests--pad-maps)
 - [Crates](#crates)
@@ -36,9 +37,25 @@ Three ways to use it, depending on how comfortable you are with a terminal.
 
 ### A. Desktop app (no terminal, no Python knowledge required)
 
-Pre-built `.dmg` / `.msi` / `.AppImage` releases aren't published yet
-(see [Building the desktop app](#building-the-desktop-app) to make one
-yourself). Once installed:
+Download a pre-built bundle from the [Releases page][releases]:
+
+[releases]: ../../releases/latest
+
+- **macOS arm64 (M-series)** — `Padwright_<ver>_aarch64.dmg`
+- **macOS Intel** — `Padwright_<ver>_x64.dmg`
+- **Windows x64** — `Padwright_<ver>_x64_en-US.msi`
+- **Linux x64** — `Padwright_<ver>_amd64.AppImage` or `.deb`
+
+> **First-launch warning, one-time:** the bundles aren't yet code-signed,
+> so the OS will warn the first time you open Padwright. This is expected.
+> - **macOS**: right-click the app → Open → confirm.
+> - **Windows**: SmartScreen → "More info" → "Run anyway".
+> - **Linux**: no warning.
+>
+> See [What's still rough](#whats-still-rough) for why and how this will
+> change.
+
+Once installed:
 
 1. Double-click the app.
 2. First-launch shows an empty library — click **Settings** and point
@@ -52,6 +69,9 @@ yourself). Once installed:
 
 Settings persist in a per-user config file
 (`~/Library/Application Support/com.sp404mk2.toolkit/config.json` on macOS).
+
+If no release matches your platform, you can build one yourself — see
+[Building the desktop app](#building-the-desktop-app).
 
 ### B. Local web UI (Python users)
 
@@ -300,6 +320,55 @@ one before the first public release if you want CI builds.
 
 If the Rust target cache gets confused after a path move:
 `rm -rf src-tauri/target` and rebuild.
+
+## Releasing (CI)
+
+GitHub Actions builds Padwright for macOS arm64, macOS x64, Windows x64,
+and Linux x64 on every semver tag push. See
+[`.github/workflows/release.yml`](.github/workflows/release.yml).
+
+To cut a release:
+
+```bash
+# Bump versions in package.json, src-tauri/Cargo.toml, src-tauri/tauri.conf.json
+git commit -am "release v1.1.0"
+git tag v1.1.0
+git push origin main --tags
+```
+
+The workflow:
+
+1. Spins up a runner per OS (matrix build, ~20–30 min).
+2. Installs Rust, Node, Python, system deps.
+3. Bundles `web/app.py` into a PyInstaller executable.
+4. Downloads static LGPL ffmpeg + ffprobe builds (BtbN/FFmpeg-Builds).
+5. Generates a placeholder icon if one isn't committed.
+6. Runs `cargo tauri build` and uploads the bundles to a **draft**
+   release named after the tag.
+
+You review the draft on GitHub → publish when ready.
+
+Tag conventions:
+
+- `v1.2.3` → release
+- `v1.2.3-beta.1` (any tag containing `-`) → pre-release
+- Manual trigger via the Actions tab → `workflow_dispatch`
+
+Per-tag CI consumes 4 runner-instances × ~25 min on free GitHub Actions
+minutes. Macs are the expensive runners (10× the per-minute cost).
+
+### Adding code signing later (optional)
+
+Drop these secrets into the repo's Actions settings without touching
+`release.yml`:
+
+- **Mac**: `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`,
+  `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`
+- **Windows**: `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
+
+`tauri-action` picks these up automatically and signs+notarizes. The
+first-launch warnings then disappear. Apple Developer is $99/year,
+Windows code-signing certs are typically $200/year from a CA.
 
 ## Scripts
 
@@ -666,8 +735,17 @@ that's small enough to share or version.
   duration + filename pattern matching would be the next step.
 - **No SD-card writer.** A `copy-to-import` command would just be a
   `cp -R`; not worth a script until you find yourself doing it daily.
+- **Bundles aren't code-signed yet.** First-launch warnings on Mac
+  (Gatekeeper) and Windows (SmartScreen) are inherent to unsigned apps.
+  Workaround per-user: right-click → Open on Mac, "More info" → "Run
+  anyway" on Windows. Permanent fix: $99/year Apple Developer + ~$200/year
+  Windows CA cert, dropped into GitHub Actions secrets — see
+  [Adding code signing later](#adding-code-signing-later-optional).
 - **Auto-update for the desktop app isn't wired up** (Tauri supports it
   via the updater plugin; defer until there's a v1.1).
+- **macOS universal binary not produced** — Mac users on Intel and Apple
+  Silicon download separate `.dmg`s. CI builds both. A `lipo` step
+  could merge them; skipped for now.
 
 ## Direction
 

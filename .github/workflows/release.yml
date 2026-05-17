@@ -1,0 +1,154 @@
+name: Build desktop releases
+
+# Fires on semver tag pushes (v1.0.0, v1.2.3, etc.) and on manual dispatch
+# from the Actions tab. Pre-release tags (e.g. v1.0.0-beta.1) become
+# pre-releases on GitHub.
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # tauri-action creates/uploads to GitHub Releases
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest         # arm64
+            target: aarch64-apple-darwin
+            label: macos-arm64
+          - platform: macos-13             # x86_64 Intel runner
+            target: x86_64-apple-darwin
+            label: macos-x64
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            label: linux-x64
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            label: windows-x64
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Toolchains ──────────────────────────────────────────────────────
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Setup Rust (stable, with target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+          key: ${{ matrix.target }}
+
+      # ── Linux: Tauri & GTK dev libs ─────────────────────────────────────
+      - name: Install Linux deps
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev
+
+      # ── Python sidecar ──────────────────────────────────────────────────
+      - name: Install Python deps + PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller pillow
+
+      - name: Bundle Python web/app.py into sp404-server
+        run: |
+          pyinstaller --clean pyinstaller_app.spec
+          node scripts/install_sidecar.mjs
+
+      # ── ffmpeg + ffprobe sidecars ───────────────────────────────────────
+      - name: Download & install ffmpeg / ffprobe (LGPL builds)
+        run: node scripts/ci_download_ffmpeg.mjs --target ${{ matrix.target }}
+
+      # ── Icons ───────────────────────────────────────────────────────────
+      # Generated icons aren't committed (see .gitignore). Use the
+      # placeholder generator unless a real src-tauri/icons/source.png exists.
+      - name: Generate placeholder icon if needed
+        shell: bash
+        run: |
+          if [ ! -f src-tauri/icons/128x128.png ]; then
+            python scripts/make_placeholder_icon.py
+            (cd src-tauri && cargo tauri icon ../icon.png)
+          fi
+
+      # ── npm deps (just for tauri-cli) ───────────────────────────────────
+      - name: Install npm deps
+        run: npm install
+
+      # ── Build the bundle and upload to a GitHub Release ─────────────────
+      - name: Build Tauri bundle + create/update draft release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Padwright ${{ github.ref_name }}'
+          releaseDraft: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          args: --target ${{ matrix.target }}
+          releaseBody: |
+            ## Padwright ${{ github.ref_name }}
+
+            Pre-built desktop apps for macOS (arm64 + x64), Windows, and Linux.
+
+            ### Install
+
+            - **macOS**: download the `.dmg`, drag Padwright to Applications.
+              First launch: right-click the app → Open → confirm (the build is
+              unsigned; Gatekeeper warns until we add code signing).
+            - **Windows**: run the `.msi`. SmartScreen may warn — click
+              "More info" → "Run anyway" (unsigned build).
+            - **Linux**: run the `.AppImage` or install the `.deb`.
+
+            ### First-launch setup
+
+            Click **Settings** in the app and point Padwright at:
+            - your **built kits folder** (anywhere you want Padwright to write banks)
+            - your **samples library folder** (where your raw samples live)
+
+            Then **New crate** → drag samples onto pads → **Build kit**.
+            Drag the resulting 16 WAVs into the Roland SP-404MKII app.
+
+            See the [README](https://github.com/${{ github.repository }}#readme)
+            for the full workflow.
+
+      # ── Surface artifacts in the Actions log too (useful when debugging) ─
+      - name: Upload bundle as workflow artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: padwright-${{ matrix.label }}-${{ github.ref_name }}
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app
+            src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi
+            src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
+            src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+          if-no-files-found: ignore
+          retention-days: 14
